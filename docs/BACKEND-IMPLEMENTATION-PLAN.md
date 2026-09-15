@@ -1,8 +1,8 @@
 # DBCE Coders Club — Backend Implementation Plan
 
-> Status: Phase 2 — approved-email login with a signed HTTP-only session, plus real member profile integration
-> Phase: Foundation (identity + annual membership + levels + XP ledger audit trail)
-> Next: real member seeding/import, treated as a separate future step (§5)
+> Status: Phase 3 — XP engine (ledger-based) plus manual XP management by the two authorized XP managers
+> Phase: Foundation (identity + annual membership + levels + XP ledger audit trail + XP management)
+> Real member import: prepared as a one-time manual SQL script kept **outside the repository** (private member data — never committed; see §5)
 
 ---
 
@@ -65,7 +65,7 @@ The database `levels` table is the authoritative source for these definitions. T
 - **Internal Affairs** maintains the XP database and verifies XP claims / monthly leaderboard.
 - Faculty Advisors and Council have final authority on administration and XP verification.
 - The exact approval workflow is **not defined** and must not be invented.
-- XP activity values and penalties from the Handbook belong to the **later XP phase**, not this foundation task.
+- **Phase 3 decision (implemented):** XP is managed manually by **exactly two XP managers** — Basil Shaikh Mohammad and Bhumika Khandelwal (`lib/xp/managers.ts`). There is no member-facing XP submission, no self-reporting, no automatic awarding, and no approval queue: a manager records an activity against a member, and the ledger is the audit trail. This is the minimal correct mechanism, not a modeling of the full Handbook workflow.
 - Whether XP resets each academic year or remains cumulative is **unresolved** — do not assume either.
 
 ### 2.5 Leaderboards
@@ -89,8 +89,9 @@ The database `levels` table is the authoritative source for these definitions. T
 - Normal members must **never** be able to directly insert arbitrary XP into the XP ledger.
 - Normal members must **not** be able to modify membership eligibility, roles, governance assignments, XP, verification state, or other security-sensitive fields.
 - Supabase RLS is the primary database security layer.
-- No service-role client is used in this foundation.
 - Server-side session verification is required for protected endpoints.
+- **Phase 3 addition:** a server-only service-role client (`lib/supabase/admin.ts`, `SUPABASE_SERVICE_ROLE_KEY`) exists for exactly two operations, both of which RLS blocks for the anon key: writing `xp_ledger` rows, and summing one member's XP (`get_member_xp_total`). Both are reachable only from route handlers — writes only after the signed session is verified and the actor is confirmed to be one of the two XP managers. The key is never `NEXT_PUBLIC_`, never imported into a client component, and never reaches the browser. Everything else in the app still uses the anon key.
+- **Phase 3 correction:** `get_member_xp_total(member_id)` takes an arbitrary member id, so it is granted to `service_role` **only** — never to `anon` or `authenticated`. Granting it to a client role would let anyone holding the publishable key read any member's XP total straight from the Supabase RPC endpoint, bypassing the API. The API enforces "own XP only" on top of that (§3.10).
 
 ---
 
@@ -145,6 +146,7 @@ club member (members)  ← application owns member identity (no Supabase Auth)
 - `user_id` UUID NOT NULL → `members(id)`
 - `xp_amount` INTEGER NOT NULL CHECK (≠ 0)
 - `reason` TEXT
+- `activity_code` TEXT (Phase 3; NULL for corrective adjustments — see §3.10)
 - `created_at` TIMESTAMPTZ
 
 ### 3.4 RLS Strategy
@@ -156,6 +158,11 @@ club member (members)  ← application owns member identity (no Supabase Auth)
   - `lookup_member_id_by_email(TEXT) → UUID` — used by login; reveals nothing but whether an email is approved
   - `get_member_profile(UUID) → safe profile fields` — used by `/api/auth/me` after the session is verified; requires the unguessable member id
   - Both set `search_path = ''`, are revoked from `PUBLIC`, and are granted only to `anon` / `authenticated`. RLS on `members` is not weakened to support login.
+- **Phase 3 addition** (`supabase/migrations/20260915000001_xp_engine.sql`) — two more read-only `SECURITY DEFINER` functions, with **deliberately different grants**:
+  - `get_all_levels()` → granted to `anon`, `authenticated`. Level definitions are public reference data, so the browser-facing read path may call it.
+  - `get_member_xp_total(UUID)` → granted to **`service_role` only**, revoked from `PUBLIC`, `anon`, and `authenticated`. Member XP is private and the function accepts an arbitrary member id, so no client role may execute it; only the server-side service-role client does.
+  - The `REVOKE`s come **before** the `GRANT`s, because functions grant `EXECUTE` to `PUBLIC` by default — reversing the order would leave the default grant in force and every role would keep access.
+  - RLS on `xp_ledger` is still not weakened: no INSERT/UPDATE/DELETE policy is added for members.
 
 ### 3.5 API Surface
 
@@ -170,6 +177,15 @@ club member (members)  ← application owns member identity (no Supabase Auth)
 - `GET /api/auth/me` — now reads the application session cookie (no Supabase Auth session is involved). Response shape and status codes unchanged.
 - No registration or profile-update endpoints
 
+**Phase 3 (XP engine + manual XP management)**
+
+- `GET /api/xp/me` — the authenticated member's own XP and level: `{ memberId, totalXp, level, levelName, nextLevelXp }`; 401 without a session, 404 unknown member, 500 if the ledger sum or level rows cannot be read. Identity comes from the session cookie only — there is no member-id parameter, and asking for another member returns your own data rather than theirs.
+- `POST /api/xp/award` — the single protected XP management operation, 401 unauthenticated / 403 non-manager:
+  - award: `{ memberId, activityCode }` → the XP amount is resolved server-side from `lib/xp/activities.ts`; the client never sends an amount
+  - correction: `{ memberId, correctionXp, reason }` → appended as a new ledger row with `activity_code = NULL`; the original entry is never edited or deleted
+  - 400 invalid body / unknown activity, 404 unknown target member, 500 write failure
+- No endpoint exists for another member's XP, for listing members, or for editing/deleting ledger rows.
+
 ### 3.6 Session Model (Phase 1C)
 
 - The application session is **separate from Supabase Auth** and deliberately so.
@@ -181,7 +197,7 @@ club member (members)  ← application owns member identity (no Supabase Auth)
 
 ### 3.7 Frontend Integration Boundary
 
-The frontend UI is frozen: no redesign, no visual changes. Phase 2 replaced the hardcoded member name in `GlobalNavigation` with the session's real member profile (§3.9). The remaining hardcoded data (XP totals, level progress) stays placeholder-only until the XP phase.
+The frontend UI is frozen: no redesign, no visual changes. Phase 2 replaced the hardcoded member name in `GlobalNavigation` with the session's real member profile (§3.9). Phase 3 replaced the remaining placeholder XP/level figures with the values returned by `GET /api/xp/me` (§3.10) — a data-source swap, not a visual change.
 
 ### 3.8 Member Identity (Phase 1C correction)
 
@@ -209,6 +225,20 @@ Still placeholder in the UI (not part of Phase 2): XP totals, level, and progres
 
 **Not part of Phase 2:** seeding or importing the real member list. That is a separate future step (§5) and requires the project owner's real Name + email data.
 
+### 3.10 XP Engine and Manual XP Management (Phase 3)
+
+XP is a **ledger**, not a number on a member row.
+
+- **No stored total.** A member's XP is always `SUM(xp_amount)` over `xp_ledger`. There is no `total_xp` column and no denormalized cache, so a total can never drift from its history.
+- **Activity values live in one place.** `lib/xp/activities.ts` holds the 15 Handbook activities and their XP values (50–250). An award request carries only an activity *code*; the server resolves the amount. A client cannot choose, inflate, or omit an amount.
+- **Levels come from the database.** The seven level definitions stay in the `levels` table (seeded from the Handbook); `lib/xp/levels.ts` only derives which level a total falls into. No second hardcoded copy of the level table exists in application code — the previously hardcoded copy in `GlobalNavigation` (which had drifted to 3500/5000/7000/10000 and "Code Legend") was removed in favour of the API response.
+- **Only two people may change XP.** `lib/xp/managers.ts` lists exactly two manager emails — Basil Shaikh Mohammad and Bhumika Khandelwal — and `isXpManager(email)` is evaluated server-side against the email resolved from the signed session. Everyone else, including other council members, gets 403. There is no role column, no `isAdmin` flag, and no general permission system.
+- **Members cannot touch their own XP.** There is no submit, claim, approve, or self-report path. The only write is a manager action.
+- **Corrections append, never rewrite.** A mistake is fixed with a new ledger row carrying a signed amount, a mandatory reason, and `activity_code = NULL`. The original entry stays in the audit trail.
+- **The privileged client is used for two things only** (§2.7): writing ledger rows, and summing one member's XP through the `service_role`-only RPC.
+- **Nothing is awarded automatically.** No login bonus, attendance capture, GitHub integration, hackathon hook, certificate flow, notification, or payment trigger exists.
+- **Tests** (`npm test`, 41 assertions) cover the level boundaries 0/499/500/1000/2000/3000/4000/5000/5000+, the exact Handbook amounts, the manager allowlist, 401/403/404/400 handling, rejection of client-supplied amounts, the migration's grant model, and the absence of any member write policy on `xp_ledger`. They run against in-memory doubles, so no XP is written for real members.
+
 ---
 
 ## 4. Unresolved Decisions (Do Not Implement Yet)
@@ -216,7 +246,7 @@ Still placeholder in the UI (not part of Phase 2): XP totals, level, and progres
 These require project-owner input and must remain unresolved:
 
 1. ~~**Exact authentication mechanism** — email/password, OAuth, magic link, OTP, or other~~ — **resolved in Phase 1C**: approved-email allowlist login with a simple server-side session
-2. **Exact XP approval workflow** — how faculty coordinators, student core committee, Faculty Advisors, and Council approve
+2. **Exact XP approval workflow** — how faculty coordinators, student core committee, Faculty Advisors, and Council approve. Phase 3 implements only the minimal manual mechanism (§2.4); the formal Handbook workflow remains unmodeled.
 3. **Whether XP resets each academic year or remains cumulative**
 4. **Challenge submission behavior** — how students submit, format, approval flow
 5. **Student email-domain assumption** — do not invent a domain; the real member list comes later
@@ -228,7 +258,7 @@ These require project-owner input and must remain unresolved:
 11. **Session timeout** — session lifetime is 7 days (`SESSION_TTL_SECONDS` in `lib/auth/session.ts`); a different duration or idle timeout remains undecided
 12. ~~**OAuth providers** — GitHub/Discord login undefined~~ — **excluded** in Phase 1C; no OAuth is used
 13. **Level icon storage** — static files work for now
-14. **XP activity values / penalties** — belong to the later XP phase
+14. ~~**XP activity values**~~ — **resolved in Phase 3**: the 15 Handbook activity values live in `lib/xp/activities.ts` (§3.10). **Handbook penalties remain unresolved** as automated presets; Phase 3 only provides the generic corrective-entry mechanism.
 
 ---
 
@@ -267,36 +297,42 @@ These require project-owner input and must remain unresolved:
 4. ✅ Logout clears the server session cookie via `POST /api/auth/logout`
 5. ✅ No UI redesign, no new dependencies
 
-### Next Step (not yet started): Member Seeding / Real Member Import
+### Phase 3: XP Engine & Manual XP Management (Implemented)
 
-This is a **separate future step**, deliberately kept out of Phase 2. Profile integration displays whatever member row the session resolves to; importing the real roster is independent of it.
+- ✅ Ledger-based XP: totals calculated from `xp_ledger`, no stored column
+- ✅ Server-side truth: XP amounts come from `lib/xp/activities.ts` (handbook values), levels from DB `levels` table
+- ✅ Only two XP managers may award XP: Basil Shaikh Mohammad and Bhumika Khandelwal (`lib/xp/managers.ts`)
+- ✅ Members cannot submit or modify their own XP (401 unauthenticated, 403 for non-managers)
+- ✅ Corrections via negative ledger entries with reason, preserving history
+- ✅ `GET /api/xp/me` returns member's own total XP, level, and next level threshold
+- ✅ `POST /api/xp/award` (protected) awards handbook activity XP or appends corrective entry
+- ✅ Frontend minimal integration: `GlobalNavigation` now reads real XP/level from `/api/xp/me`
+- ✅ RLS preserved: no member write access to `xp_ledger`; service-role key never exposed to browser
+- ✅ Tests cover level boundaries, authorization (401/403), handbook amounts, arbitrary-amount rejection, the migration's grant model, and the absence of member write access
+- ✅ Migration `supabase/migrations/20260915000001_xp_engine.sql` adds `activity_code` and two SECURITY DEFINER RPCs: `get_all_levels` (client-readable) and `get_member_xp_total` (`service_role` only)
+- ⚠️ The migration is part of the Phase 3 commit and is applied through the normal Supabase migration workflow; the endpoints do not work until it has been applied
 
-- Project owner supplies the real Name + email list
-- Seed real members manually (no fake data) — `members.id` is generated by the database, so no Supabase Auth user is required
-- No public registration
-- No Supabase Auth provider configuration is needed for member login
+### Member Seeding (prepared, not part of any commit)
 
-### Phase 3: XP System & Leaderboard (Later)
-
-- Implement XP earning, verification, and approval workflow per Handbook
-- Implement monthly leaderboards (database-derived)
-- Model Handbook governance roles with explicit permissions
+The real 42-member roster is imported by a **one-time SQL script kept outside the repository**, on the project owner's machine. Private member data is never committed to Git, never placed in source, migrations, `.env` files, or docs. The script is run manually once in the Supabase SQL Editor.
 
 ### Phase 4: Extended Features (Later)
 
+- Monthly leaderboards (database-derived, not in-memory aggregation)
+- Handbook governance roles with explicit, narrow permission boundaries
 - Challenges, events, payments (if required), council management
 
 ---
 
 ## 6. Do NOT Implement Yet
 
-These items are explicitly out of scope for the foundation phases (1B–2) and must not be built until the associated decisions are resolved:
+These items are explicitly out of scope for the foundation phases (1B–3) and must not be built until the associated decisions are resolved:
 
 - Public registration system
 - Password-based, OTP, magic-link, or OAuth login — Phase 1C fixed the mechanism as an approved-email allowlist (§2.2)
-- XP earning, claiming, verification, or award logic
-- XP penalties
-- XP approval workflow
+- ~~XP award logic~~ — **Phase 3 added the minimal manual mechanism** (§3.10); member-facing claiming/verification/submission remains out of scope
+- XP penalties as automated presets — only the generic corrective-entry mechanism exists
+- XP approval workflow (the formal Handbook one)
 - XP reset behavior across academic years
 - Leaderboard aggregation
 - Challenge enrollment/submission
@@ -304,9 +340,10 @@ These items are explicitly out of scope for the foundation phases (1B–2) and m
 - Payments
 - Admin tooling
 - Generic `admin` / `council` / `faculty_coordinator` role columns
-- Real member email/name seeding — this is the next step (§5), not part of Phase 2 profile integration
+- Real member email/name seeding — prepared outside the repository (§5); never committed
 - Invented student email domains
 - Broad member self-update of security-sensitive fields
+- Any endpoint that returns another member's XP
 
 ---
 
@@ -317,29 +354,35 @@ These items are explicitly out of scope for the foundation phases (1B–2) and m
 - ✅ Read all backend foundation files
 - ✅ Read all documentation sources
 - ✅ Audited migration for premature assumptions
+- ✅ Audited the Phase 3 migration's GRANT/REVOKE sequence and final privileges
 - ✅ Verified no real member data is seeded
-- ✅ Verified no service-role client is used
+- ✅ Verified the service-role client is server-only and used for exactly two operations (XP write, one member's XP sum)
+- ✅ Verified `get_member_xp_total` is not executable by `anon` or `authenticated`
 - ✅ Verified the login API only sets/clears a signed session cookie and never exposes secrets
 - ✅ Verified no public registration exists
-- ✅ Verified no role, XP, level, leaderboard, or seeding logic was implemented
+- ✅ Verified no role column, leaderboard, or seeding logic was implemented
 
 ### Current state
 
 - Branch: `backend-foundation`
-- Phase 1B / 1C backend foundation is committed; Phase 2 changes are in the working tree
+- Phase 1B / 1C / 2 are committed; Phase 3 changes are in the working tree, pending review
+- The Phase 3 migration is a normal, tracked migration file — it is **committed with Phase 3** and applied through the standard Supabase migration workflow, exactly like the Phase 1B/1C migrations. It is not a loose SQL file and is not applied automatically by the application.
+- Applying it is a deliberate, separate step performed by the project owner (see §5)
 - No push performed
 
 ---
 
 ## 8. Summary
 
-The foundation phases (1B–2) establish a **secure, minimal foundation**:
+The foundation phases (1B–3) establish a **secure, minimal foundation**:
 
 - Member identity is owned by the application's `members` table — no Supabase Auth identity is created or required
 - Annual July–June membership is represented without inventing payment workflows
 - The seven authoritative Handbook levels are seeded as the single source of truth
-- The XP ledger exists as a future audit trail with **no member write access**
+- The XP ledger is the XP system: totals are summed from history, never stored, and **no member can write to it**
+- XP changes are made manually by exactly two named managers, with the Handbook amounts resolved server-side and corrections appended rather than rewritten
+- A member's XP is readable only by that member, through an endpoint whose identity comes from the signed session; the underlying RPC is not client-executable
 - Governance roles are deliberately **not** modeled as generic role columns
-- Login is an approved-email allowlist with an application-owned signed session, and the signed-in member's real profile name is displayed by the existing UI
-- The XP approval workflow and XP reset behavior remain **unresolved**, and real member seeding is the next separate step
+- Login is an approved-email allowlist with an application-owned signed session, and the signed-in member's real profile name, XP, and level are displayed by the existing UI
+- The formal XP approval workflow and XP reset behavior remain **unresolved**; the real member roster is seeded manually from a script kept outside the repository
 - The frontend UI was not redesigned

@@ -27,6 +27,8 @@ export const xpLedgerEntrySchema = z.object({
   id: z.number().int(),
   user_id: z.string().uuid(),
   xp_amount: z.number().int().refine((value) => value !== 0, 'XP amount must not be zero'),
+  // Phase 3: handbook activity code, or null for a corrective adjustment.
+  activity_code: z.string().nullable().optional(),
   reason: z.string().nullable().optional(),
   created_at: z.string(),
 });

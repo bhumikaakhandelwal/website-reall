@@ -17,6 +17,8 @@ export interface XPLedgerEntry {
   id: number;
   user_id: string;
   xp_amount: number; // Can be positive (earning) or negative (penalty)
+  // Phase 3: handbook activity code, or null for a corrective adjustment.
+  activity_code: string | null;
   reason: string | null;
   created_at: string;
 }
