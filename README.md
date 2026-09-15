@@ -20,6 +20,18 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Environment variables
+
+Copy `.env.example` to `.env.local` and fill in the values. All three are **required**:
+
+| Variable | Purpose |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon/publishable key |
+| `SESSION_SECRET` | Signs the application session cookie (`lib/auth/session.ts`). There is no fallback — if it is unset, login and session verification fail. |
+
+`SESSION_SECRET` must be a long random value, e.g. `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

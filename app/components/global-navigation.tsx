@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { motion, AnimatePresence } from "motion/react";
 import { Container } from "./container";
+import type { MemberProfile } from "@/lib/db/types";
 
 const navigation = [
   { label: "Home", href: "/" },
@@ -32,26 +33,15 @@ const levelIcons: Record<number, string> = {
   7: "/level-icons/level-7.png",
 };
 
-// Level titles
-const levelNames: Record<number, string> = {
-  1: "Rookie",
-  2: "Novice Coder",
-  3: "Code Explorer",
-  4: "Code Warrior",
-  5: "Coding Champion",
-  6: "Code Master",
-  7: "Code Legend",
-};
-
-// XP required for each level
-const levelRequirements: Record<number, number> = {
-  1: 500,
-  2: 1000,
-  3: 2000,
-  4: 3500,
-  5: 5000,
-  6: 7000,
-  7: 10000,
+// Shape of GET /api/xp/me.
+// Level titles and XP thresholds are deliberately NOT duplicated here — the
+// server derives them from the levels table (lib/xp/levels.ts) and sends them.
+type MemberXp = {
+  memberId: string;
+  totalXp: number;
+  level: number;
+  levelName: string;
+  nextLevelXp: number | null;
 };
 
 export function GlobalNavigation() {
@@ -61,24 +51,31 @@ export function GlobalNavigation() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
+  // Phase 2: the logged-in member's identity. Source of truth is the signed
+  // server session (via /api/auth/me); localStorage is only the UI gate.
+  const [member, setMember] = useState<MemberProfile | null>(null);
+
+  // Phase 3: the logged-in member's XP and level, from the server's ledger
+  // sum. Null until the response arrives.
+  const [xp, setXp] = useState<MemberXp | null>(null);
+
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
-  // TEMPORARY DATA
-  // These will later come from your database.
-  const currentLevel = 1;
-  const currentXP = 350;
-
-  const nextLevelXP =
-    levelRequirements[currentLevel] ?? levelRequirements[7];
+  // Phase 3: progression is server-derived — no placeholder values remain.
+  const currentLevel = xp?.level ?? 1;
+  const currentXP = xp?.totalXp ?? 0;
+  const nextLevelXP = xp?.nextLevelXp ?? null;
 
   const progress =
-    currentLevel >= 7
+    nextLevelXP === null
       ? 100
       : Math.min((currentXP / nextLevelXP) * 100, 100);
 
   // Logout
   const handleLogout = () => {
     localStorage.removeItem("dbce-logged-in");
+    // Fire-and-forget: clear the server session cookie.
+    fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     setProfileOpen(false);
     router.replace("/login");
   };
@@ -107,6 +104,51 @@ export function GlobalNavigation() {
   setProfileOpen(false);
   setIsMenuOpen(false);
 }, [pathname]);
+
+  // Load the current member once per mount. The response is the only thing
+  // that decides who the visitor is — no client value is trusted as identity.
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadCurrentMember() {
+      try {
+        const [memberResponse, xpResponse] = await Promise.all([
+          fetch("/api/auth/me", { signal: controller.signal }),
+          fetch("/api/xp/me", { signal: controller.signal }),
+        ]);
+
+        // The server session is gone (expired or cleared): drop the client
+        // gate and send the visitor back to the login screen.
+        if (memberResponse.status === 401 || memberResponse.status === 404) {
+          localStorage.removeItem("dbce-logged-in");
+          router.replace("/login");
+          return;
+        }
+
+        if (memberResponse.ok) {
+          const data: { user?: MemberProfile } = await memberResponse.json();
+
+          if (data.user) {
+            setMember(data.user);
+          }
+        }
+
+        // The XP endpoint derives the total from the ledger; its own 401/404
+        // mirrors the member check above, so a failure here just leaves the
+        // panel in its loading state.
+        if (xpResponse.ok) {
+          const data: MemberXp = await xpResponse.json();
+          setXp(data);
+        }
+      } catch {
+        // Aborted or unreachable — the profile stays in its loading state.
+      }
+    }
+
+    loadCurrentMember();
+
+    return () => controller.abort();
+  }, [router]);
 
   // Login page should not show navbar
   if (pathname === "/login") {
@@ -256,9 +298,16 @@ export function GlobalNavigation() {
                             OPERATOR
                           </p>
 
-                          <p className="mt-1 truncate text-lg font-bold">
-                            Bhumika Khandelwal
-                          </p>
+                          {member ? (
+                            <p className="mt-1 truncate text-lg font-bold">
+                              {member.display_name}
+                            </p>
+                          ) : (
+                            <span
+                              aria-hidden="true"
+                              className="mt-1 block h-7 w-40 animate-pulse rounded bg-muted"
+                            />
+                          )}
 
                           <div className="mt-2 flex items-center gap-2">
 
@@ -271,7 +320,7 @@ export function GlobalNavigation() {
                             </span>
 
                             <span className="font-mono text-[10px] text-muted-foreground">
-                              {levelNames[currentLevel]}
+                              {xp?.levelName ?? ""}
                             </span>
 
                           </div>
@@ -302,7 +351,7 @@ export function GlobalNavigation() {
                         </div>
 
                         <p className="font-mono text-[10px] text-muted-foreground">
-                          {currentLevel >= 7
+                          {nextLevelXP === null
                             ? "MAX LEVEL"
                             : `${nextLevelXP.toLocaleString()} XP`}
                         </p>
@@ -331,7 +380,7 @@ export function GlobalNavigation() {
 
                       {/* NEXT LEVEL */}
 
-                      {currentLevel < 7 && (
+                      {nextLevelXP !== null && (
                         <div className="mt-3 flex justify-between">
 
                           <span className="font-mono text-[9px] tracking-[0.1em] text-muted-foreground">
@@ -536,9 +585,16 @@ export function GlobalNavigation() {
 
                   <div>
 
-                    <p className="text-sm font-semibold">
-                      Bhumika Khandelwal
-                    </p>
+                    {member ? (
+                      <p className="text-sm font-semibold">
+                        {member.display_name}
+                      </p>
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        className="block h-5 w-32 animate-pulse rounded bg-muted"
+                      />
+                    )}
 
                     <p className="font-mono text-[9px] tracking-[0.1em] text-muted-foreground">
                       LEVEL {currentLevel}

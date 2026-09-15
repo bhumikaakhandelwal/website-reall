@@ -32,9 +32,14 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...except the placeholder template, which must be committed
+!.env.example
 
 # vercel
 .vercel
+
+# supabase CLI working files (project ref, pooler URL — machine-local, not schema)
+supabase/.temp/
 
 # typescript
 *.tsbuildinfo
