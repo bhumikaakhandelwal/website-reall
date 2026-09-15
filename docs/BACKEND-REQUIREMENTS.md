@@ -2,6 +2,9 @@
 
 > Analysis date: 2026-09-10
 > Status: Read-only analysis. No implementation performed.
+> Superseded on authentication: this analysis predates the finalized Phase 1C model and its
+> `auth.users`-based schema sketches are historical. The approved-email allowlist login and the
+> application-owned `members.id` are authoritative in `docs/BACKEND-IMPLEMENTATION-PLAN.md` §2.2 and §3.8.
 
 ---
 

@@ -34,7 +34,7 @@ export default function LoginPage() {
 
   /* ================= LOGIN ================= */
 
-  const handleLogin = (e: FormEvent<HTMLFormElement>) => {
+  const handleLogin = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
     const enteredEmail = email.trim().toLowerCase();
@@ -42,28 +42,29 @@ export default function LoginPage() {
     setLoginStatus("checking");
 
     /*
-     * FRONTEND DEMO
-     *
-     * For now we are assuming that this email
-     * exists in the student database.
-     *
-     * Later this will be replaced with an
-     * actual database/API check.
+     * Backend check against the approved members list.
+     * The 1000ms minimum keeps the existing "scanning" state visible.
      */
+    const [response] = await Promise.all([
+      fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: enteredEmail }),
+      }).catch(() => null),
+      new Promise((resolve) => setTimeout(resolve, 1000)),
+    ]);
 
-    setTimeout(() => {
-      if (enteredEmail === "abc@gmail.com") {
-        localStorage.setItem("dbce-logged-in", "true");
-        setLoginStatus("granted");
+    if (response?.ok) {
+      localStorage.setItem("dbce-logged-in", "true");
+      setLoginStatus("granted");
 
-        setTimeout(() => {
-          router.replace("/");
-        }, 1800);
-      } else {
-        localStorage.removeItem("dbce-logged-in");
-        setLoginStatus("denied");
-      }
-    }, 1000);
+      setTimeout(() => {
+        router.replace("/");
+      }, 1800);
+    } else {
+      localStorage.removeItem("dbce-logged-in");
+      setLoginStatus("denied");
+    }
   };
 
   return (

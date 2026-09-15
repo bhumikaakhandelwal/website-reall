@@ -1,7 +1,8 @@
 # DBCE Coders Club — Backend Implementation Plan
 
-> Status: Phase 1B correction — foundation audit and secure baseline
+> Status: Phase 2 — approved-email login with a signed HTTP-only session, plus real member profile integration
 > Phase: Foundation (identity + annual membership + levels + XP ledger audit trail)
+> Next: real member seeding/import, treated as a separate future step (§5)
 
 ---
 
@@ -28,16 +29,19 @@ The following documents and facts govern backend design, in this order of author
 - **Only registered members are eligible for XP and rewards.**
 - No automated payment system is required.
 - No elaborate membership-management system is required right now.
-- Real member names/emails will be supplied later by the project owner — **no real member data is seeded in this phase**.
+- Real member names/emails will be supplied later by the project owner. Seeding that real list is a **separate future step**, not part of profile integration (§5).
 
 ### 2.2 Authentication
 
-- The frontend login UI is frozen and remains unchanged.
-- Authentication behavior must follow the existing frontend login design.
-- The exact authentication mechanism is **intentionally undecided**. Do not assume email/password, OAuth, magic link, OTP, or any other mechanism until explicitly decided.
-- No custom login/password API is implemented while the mechanism is undecided.
+- The existing frontend login UI is kept as-is; only its placeholder demo check was replaced by the real API call.
+- Authentication behavior follows the existing frontend login design.
+- The authentication mechanism is **approved-email allowlist login with a simple server-side session**.
+- No password, OTP, magic link, OAuth, or email verification is used.
 - No public registration is implemented.
-- A Supabase Auth identity does **not** automatically imply Coders Club membership — the `members` table is the allowlist.
+- A Supabase Auth identity is **not** created or used; the application maintains its own session separate from Supabase Auth.
+- The `members` table serves as the allowlist for approved emails.
+
+> **Intentional security tradeoff:** Possession or knowledge of an approved email address is treated as sufficient to log in. This weak identity model is explicitly accepted for simplicity. The application does **not** use client-side localStorage as the authoritative authentication mechanism; it validates the session server-side via an HTTP-only cookie and does not expose service-role credentials or create Supabase Auth users automatically.
 
 ### 2.3 XP Levels
 
@@ -97,32 +101,30 @@ These are technical choices made to implement the confirmed requirements safely:
 ### 3.1 Stack
 
 - **Database:** Supabase PostgreSQL
-- **Authentication provider:** Supabase Auth (mechanism undecided)
+- **Authentication provider:** none for members — approved-email allowlist plus this application's own signed session cookie (Phase 1C, §2.2). Supabase Auth is **not** used.
 - **Row Level Security:** enabled on all tables
 - **Backend API:** Next.js Route Handlers (`app/api/*`)
 - **Validation:** Zod where useful
-- **Client library:** `@supabase/ssr` for cookie-based auth in Next.js App Router
-- **Environment:** public Supabase URL + anon/publishable key only
+- **Client library:** `@supabase/ssr` for server-side PostgreSQL access in the Next.js App Router
+- **Environment:** public Supabase URL, anon/publishable key, and `SESSION_SECRET` (session cookie signing)
 
 ### 3.2 Entity Model
 
 The foundation supports the future concept:
 
 ```text
-Supabase Auth identity (auth.users)
+club member (members)  ← application owns member identity (no Supabase Auth)
         │
-        └── 1:1 ──► club member (members)
-                          │
-                          ├── annual membership (July–June)
-                          │
-                          └── future: XP ledger + leaderboards
+        ├── annual membership (July–June)
+        │
+        └── future: XP ledger + leaderboards
 ```
 
 ### 3.3 Phase 1B Tables
 
-**`members`** — approved Coders Club member profiles extending `auth.users`
+**`members`** — approved Coders Club member profiles (application-owned identity)
 
-- `id` UUID PK → `auth.users(id)`
+- `id` UUID PK, `DEFAULT gen_random_uuid()` — no Supabase Auth dependency (see §3.8)
 - `email` TEXT UNIQUE NOT NULL
 - `display_name` TEXT NOT NULL
 - `membership_status` TEXT CHECK (`pending`, `active`, `inactive`)
@@ -150,15 +152,62 @@ Supabase Auth identity (auth.users)
 - **`members`:** members can read their own row only. **No self-update policy** — membership fields are security-sensitive.
 - **`levels`:** authenticated users can read. No write policies.
 - **`xp_ledger`:** members can read their own entries. **No INSERT/UPDATE/DELETE policies** for members.
+- **Phase 1C addition:** because approved-email login has no Supabase Auth session, `auth.uid()` is NULL and the Phase 1B `members` policies cannot serve the login flow. Rather than weakening RLS (a permissive SELECT policy would expose every member's email) or introducing a service-role key, two narrow `SECURITY DEFINER` functions were added in `supabase/migrations/20260914000001_member_login_lookup.sql`:
+  - `lookup_member_id_by_email(TEXT) → UUID` — used by login; reveals nothing but whether an email is approved
+  - `get_member_profile(UUID) → safe profile fields` — used by `/api/auth/me` after the session is verified; requires the unguessable member id
+  - Both set `search_path = ''`, are revoked from `PUBLIC`, and are granted only to `anon` / `authenticated`. RLS on `members` is not weakened to support login.
 
-### 3.5 API Surface (Phase 1B)
+### 3.5 API Surface
 
-- `GET /api/auth/me` — verify Supabase session, return safe member fields, return 401/404/500 as appropriate
-- No login, logout, registration, or profile-update endpoints yet
+**Phase 1B**
 
-### 3.6 Frontend Integration Boundary
+- `GET /api/auth/me` — return safe member fields, 401/404/500 as appropriate
 
-The frontend is frozen. Backend integration (replacing hardcoded profile/XP data in `GlobalNavigation`) is a later phase and must not redesign or rewrite the frontend UI.
+**Phase 1C (approved-email login)**
+
+- `POST /api/auth/login` — body `{ email }`; validates syntax, normalizes (trim + lowercase), checks the `members` allowlist, sets the signed HTTP-only session cookie, returns `{ ok: true }`; 400 invalid email, 401 not approved, 500 server error
+- `POST /api/auth/logout` — clears the session cookie
+- `GET /api/auth/me` — now reads the application session cookie (no Supabase Auth session is involved). Response shape and status codes unchanged.
+- No registration or profile-update endpoints
+
+### 3.6 Session Model (Phase 1C)
+
+- The application session is **separate from Supabase Auth** and deliberately so.
+- `lib/auth/session.ts` (small and isolated) creates, verifies, and clears it.
+- Cookie `dbce_session`: `httpOnly`, `sameSite=lax`, `secure` in production, `path=/`, 7-day expiry, signed with HMAC-SHA256 (`node:crypto` — **no new dependency**).
+- The cookie payload holds only `{ memberId, expiresAt }` — never the member's database record. It is not readable by client-side JavaScript.
+- Requires the `SESSION_SECRET` environment variable (declared in `lib/env.ts`). If it is unset, session operations throw rather than falling back to a predictable secret.
+- Client-side `localStorage` key `dbce-logged-in` remains a **UI gate indicator only** — never the authoritative authentication state.
+
+### 3.7 Frontend Integration Boundary
+
+The frontend UI is frozen: no redesign, no visual changes. Phase 2 replaced the hardcoded member name in `GlobalNavigation` with the session's real member profile (§3.9). The remaining hardcoded data (XP totals, level progress) stays placeholder-only until the XP phase.
+
+### 3.8 Member Identity (Phase 1C correction)
+
+The initial schema declared `members.id` as a foreign key to `auth.users(id)` with no default. The finalized approved-email login (§2.2) does not create Supabase Auth users, so that declaration made manual member seeding impossible: an insert either failed the NOT NULL constraint on `id` (no default) or failed the foreign key (a matching `auth.users` row would have to exist first).
+
+`supabase/migrations/20260914000002_members_standalone_identity.sql` corrects this with the smallest possible change:
+
+- drops the `members_id_fkey` constraint on `auth.users`,
+- sets `members.id DEFAULT gen_random_uuid()`,
+- keeps `id` as the primary key, adds no column, and does not modify `xp_ledger`.
+
+No real member rows existed, so there was no data to migrate. The Phase 1B RLS policies that reference `auth.uid()` are intentionally left in place: with no Supabase Auth session they never match, so `members` stays unreadable with the anon key and all application reads continue to go through the §3.4 functions.
+
+### 3.9 Real Member Profile Integration (Phase 2)
+
+Phase 2 connects the existing UI to the real member record. Scope was deliberately narrow:
+
+- `GlobalNavigation` fetches `GET /api/auth/me` once per mount and renders the response's `display_name` in place of the old hardcoded placeholder name.
+- The server session remains the only source of identity. The component trusts the API response, never a client-side value; `localStorage` (`dbce-logged-in`) stays a UI gate only.
+- While the request is in flight a neutral skeleton is shown; no layout or styling was redesigned.
+- If the session is missing or expired (`401` / `404`), the client gate is cleared and the visitor is sent to `/login`.
+- Logout now also calls `POST /api/auth/logout` so the server session cookie is cleared, not just the client gate.
+
+Still placeholder in the UI (not part of Phase 2): XP totals, level, and progress figures. Those wait for the XP phase.
+
+**Not part of Phase 2:** seeding or importing the real member list. That is a separate future step (§5) and requires the project owner's real Name + email data.
 
 ---
 
@@ -166,7 +215,7 @@ The frontend is frozen. Backend integration (replacing hardcoded profile/XP data
 
 These require project-owner input and must remain unresolved:
 
-1. **Exact authentication mechanism** — email/password, OAuth, magic link, OTP, or other
+1. ~~**Exact authentication mechanism** — email/password, OAuth, magic link, OTP, or other~~ — **resolved in Phase 1C**: approved-email allowlist login with a simple server-side session
 2. **Exact XP approval workflow** — how faculty coordinators, student core committee, Faculty Advisors, and Council approve
 3. **Whether XP resets each academic year or remains cumulative**
 4. **Challenge submission behavior** — how students submit, format, approval flow
@@ -175,9 +224,9 @@ These require project-owner input and must remain unresolved:
 7. **Additional profile fields** — department, year, GitHub URL, bio, etc.
 8. **Council / governance role modeling** — how Handbook roles map to database permissions
 9. **Leaderboard page** — `/leaderboard` is referenced by navigation but does not exist
-10. **Password reset flow** — not present in current UI
-11. **Session timeout** — duration undefined
-12. **OAuth providers** — GitHub/Discord login undefined
+10. ~~**Password reset flow** — not present in current UI~~ — **not applicable**: login is passwordless (approved-email allowlist)
+11. **Session timeout** — session lifetime is 7 days (`SESSION_TTL_SECONDS` in `lib/auth/session.ts`); a different duration or idle timeout remains undecided
+12. ~~**OAuth providers** — GitHub/Discord login undefined~~ — **excluded** in Phase 1C; no OAuth is used
 13. **Level icon storage** — static files work for now
 14. **XP activity values / penalties** — belong to the later XP phase
 
@@ -192,7 +241,7 @@ These require project-owner input and must remain unresolved:
 - Middleware session refresh implemented
 - Initial schema review
 
-### Phase 1B: Secure Foundation Correction (This Phase)
+### Phase 1B: Backend Foundation (Complete)
 
 1. ✅ Fix Supabase client helpers (async server client, canonical middleware)
 2. ✅ Remove speculative auth schemas and environment variables
@@ -201,12 +250,31 @@ These require project-owner input and must remain unresolved:
 5. ✅ Fix `/api/auth/me` to return safe fields with proper status codes
 6. ✅ Update this implementation plan
 
-### Phase 2: Member Seeding & Auth (Later)
+### Phase 1C: Approved-Email Authentication (Complete)
 
-- Project owner supplies real Name + Gmail list
-- Seed real members manually (no fake data)
-- Configure Supabase Auth provider per decided mechanism
+1. ✅ Finalized the authentication model: approved-email allowlist, no password / OTP / magic link / OAuth / registration
+2. ✅ Added `lookup_member_id_by_email` and `get_member_profile` as narrow `SECURITY DEFINER` functions (no weakened RLS, no service-role key)
+3. ✅ Added the signed HTTP-only session (`lib/auth/session.ts`) — HMAC-SHA256 over `node:crypto`, independent of Supabase Auth
+4. ✅ Implemented `POST /api/auth/login` and `POST /api/auth/logout`; reworked `GET /api/auth/me` to read the application session
+5. ✅ Renamed `middleware.ts` to `proxy.ts` for Next.js 16
+6. ✅ Removed the `members.id → auth.users(id)` dependency so members can be seeded without Supabase Auth
+
+### Phase 2: Real Member Profile Integration (Complete)
+
+1. ✅ `GlobalNavigation` reads the signed-in member from `GET /api/auth/me` (server session is the only identity source)
+2. ✅ Replaced the hardcoded placeholder name with the member's real `display_name`
+3. ✅ Session expiry (`401` / `404`) clears the client gate and returns the visitor to `/login`
+4. ✅ Logout clears the server session cookie via `POST /api/auth/logout`
+5. ✅ No UI redesign, no new dependencies
+
+### Next Step (not yet started): Member Seeding / Real Member Import
+
+This is a **separate future step**, deliberately kept out of Phase 2. Profile integration displays whatever member row the session resolves to; importing the real roster is independent of it.
+
+- Project owner supplies the real Name + email list
+- Seed real members manually (no fake data) — `members.id` is generated by the database, so no Supabase Auth user is required
 - No public registration
+- No Supabase Auth provider configuration is needed for member login
 
 ### Phase 3: XP System & Leaderboard (Later)
 
@@ -222,11 +290,10 @@ These require project-owner input and must remain unresolved:
 
 ## 6. Do NOT Implement Yet
 
-These items are explicitly out of scope for Phase 1B and must not be built until the associated decisions are resolved:
+These items are explicitly out of scope for the foundation phases (1B–2) and must not be built until the associated decisions are resolved:
 
 - Public registration system
-- Custom login/password API
-- OAuth / magic link / OTP / any specific auth mechanism
+- Password-based, OTP, magic-link, or OAuth login — Phase 1C fixed the mechanism as an approved-email allowlist (§2.2)
 - XP earning, claiming, verification, or award logic
 - XP penalties
 - XP approval workflow
@@ -237,7 +304,7 @@ These items are explicitly out of scope for Phase 1B and must not be built until
 - Payments
 - Admin tooling
 - Generic `admin` / `council` / `faculty_coordinator` role columns
-- Real member email/name seeding
+- Real member email/name seeding — this is the next step (§5), not part of Phase 2 profile integration
 - Invented student email domains
 - Broad member self-update of security-sensitive fields
 
@@ -252,26 +319,27 @@ These items are explicitly out of scope for Phase 1B and must not be built until
 - ✅ Audited migration for premature assumptions
 - ✅ Verified no real member data is seeded
 - ✅ Verified no service-role client is used
-- ✅ Verified no custom login API exists
+- ✅ Verified the login API only sets/clears a signed session cookie and never exposes secrets
 - ✅ Verified no public registration exists
-- ✅ Verified frontend is untouched
+- ✅ Verified no role, XP, level, leaderboard, or seeding logic was implemented
 
 ### Current state
 
 - Branch: `backend-foundation`
-- No commits created
+- Phase 1B / 1C backend foundation is committed; Phase 2 changes are in the working tree
 - No push performed
 
 ---
 
 ## 8. Summary
 
-Phase 1B establishes a **secure, minimal foundation**:
+The foundation phases (1B–2) establish a **secure, minimal foundation**:
 
-- Supabase Auth identity is linked to a manually-maintained `members` table
+- Member identity is owned by the application's `members` table — no Supabase Auth identity is created or required
 - Annual July–June membership is represented without inventing payment workflows
 - The seven authoritative Handbook levels are seeded as the single source of truth
 - The XP ledger exists as a future audit trail with **no member write access**
 - Governance roles are deliberately **not** modeled as generic role columns
-- Authentication mechanism, XP approval workflow, and XP reset behavior remain **unresolved**
-- The frontend remains frozen and unchanged
+- Login is an approved-email allowlist with an application-owned signed session, and the signed-in member's real profile name is displayed by the existing UI
+- The XP approval workflow and XP reset behavior remain **unresolved**, and real member seeding is the next separate step
+- The frontend UI was not redesigned

@@ -21,10 +21,12 @@ export interface XPLedgerEntry {
   created_at: string;
 }
 
-// Member profile — extends Supabase auth.users
-// For foundation phase, only basic identity and membership status are needed
+// Member profile — owned entirely by the application.
+// Phase 1C finalized an approved-email allowlist login that does NOT create or
+// use Supabase Auth identities, so `members` no longer depends on auth.users.
+// For the foundation phase, only basic identity and membership status are needed.
 export interface MemberProfile {
-  id: string; // UUID from auth.users
+  id: string; // Application-generated UUID (gen_random_uuid()), not an auth user id
   email: string;
   display_name: string;
   membership_status: MembershipStatus;

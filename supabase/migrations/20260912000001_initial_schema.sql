@@ -13,7 +13,10 @@
 
 --------------------------------------------------------------------------------
 -- 1. MEMBERS TABLE
--- Core member profile data, extending Supabase Auth users.
+-- Core member profile data. The application owns member identity; this table
+-- does not depend on Supabase Auth (see the Phase 1C removed-auth-dependency
+-- migration, 20260914000002_members_standalone_identity.sql, which drops the
+-- original auth.users foreign key).
 -- Membership is manually maintained by the project owner / council.
 -- Annual membership validity is July-June (Handbook).
 --------------------------------------------------------------------------------
@@ -52,7 +55,7 @@ CREATE TABLE levels (
     id INTEGER PRIMARY KEY CHECK (id BETWEEN 1 AND 7),
     title TEXT NOT NULL,
     xp_required INTEGER NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT id
+    sort_order INTEGER NOT NULL
 );
 
 CREATE INDEX idx_levels_xp_required ON levels(xp_required);
@@ -151,6 +154,6 @@ CREATE POLICY "members can read own XP ledger"
 -- 5. COMMENTS
 --------------------------------------------------------------------------------
 
-COMMENT ON TABLE members IS 'Approved Coders Club members - extends Supabase Auth. Membership is manually maintained; annual validity is July-June.';
+COMMENT ON TABLE members IS 'Approved Coders Club members. Identity is owned by this table (no Supabase Auth dependency); membership is manually maintained and annual validity is July-June.';
 COMMENT ON TABLE levels IS 'Authoritative XP level definitions (single source of truth). Seeded with the seven Handbook levels.';
 COMMENT ON TABLE xp_ledger IS 'Audit trail for XP changes. No member write access via RLS - XP earning/verification workflow is a later phase.';

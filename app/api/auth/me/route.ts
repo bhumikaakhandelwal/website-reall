@@ -1,33 +1,32 @@
-import { createServerClient } from '@/lib/supabase/server';
+// Phase 1C: current member for the active application session.
+//
+// Phase 1B read this from a Supabase Auth session. The approved-email login
+// model does not create one, so this now reads the signed application session
+// cookie instead and verifies it server-side. Response shape and status codes
+// (401 / 404 / 500) are unchanged.
+
 import { NextResponse } from 'next/server';
+import { getMemberProfile } from '@/lib/db/queries';
+import { getSessionMemberId } from '@/lib/auth/session';
 
 export async function GET() {
   try {
-    const supabase = await createServerClient();
-    const { data: { user }, error } = await supabase.auth.getUser();
+    // The session cookie is the only identity source; a client-supplied
+    // member id is never trusted.
+    const memberId = await getSessionMemberId();
 
-    if (error || !user) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+    if (!memberId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Get member profile with safe, minimal fields
-    const { data: member, error: memberError } = await supabase
-      .from('members')
-      .select('id, email, display_name, membership_status, created_at, updated_at')
-      .eq('id', user.id)
-      .single();
+    // Safe, minimal fields only (validated against memberSchema).
+    const member = await getMemberProfile(memberId);
 
-    if (memberError || !member) {
-      return NextResponse.json(
-        { error: 'Member not found' },
-        { status: 404 }
-      );
+    if (!member || !member.success) {
+      return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
-    return NextResponse.json({ user: member });
+    return NextResponse.json({ user: member.data });
   } catch (error) {
     console.error('Error in GET /api/auth/me:', error);
     return NextResponse.json(

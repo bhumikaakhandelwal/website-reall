@@ -3,6 +3,8 @@ import { z } from 'zod';
 const envSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
+  // Used for signing the application session cookie (Phase 1C).
+  SESSION_SECRET: z.string().min(1),
 });
 
 export type Env = z.infer<typeof envSchema>;

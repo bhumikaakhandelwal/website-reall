@@ -1,4 +1,4 @@
-export { updateSession as middleware } from '@/lib/supabase/middleware';
+export { updateSession as proxy } from '@/lib/supabase/middleware';
 
 export const config = {
   matcher: [
