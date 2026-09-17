@@ -1,8 +1,27 @@
 import { createServerClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { memberSchema, levelSchema, leaderboardRowSchema } from './schema';
+import {
+  memberSchema,
+  levelSchema,
+  leaderboardRowSchema,
+  memberDirectoryRowSchema,
+} from './schema';
 import type { LevelDefinition } from '@/lib/xp/levels';
 import type { LeaderboardRow } from '@/lib/xp/leaderboards';
+
+/**
+ * One row of the member directory, as read from the database - the camelCase
+ * shape `getMemberDirectory` maps the function's snake_case columns onto. The
+ * level is deliberately absent: the route derives it from `totalXp`.
+ */
+export type MemberDirectoryRow = {
+  memberId: string;
+  email: string;
+  displayName: string;
+  membershipStatus: 'pending' | 'active' | 'inactive';
+  joinedAt: string;
+  totalXp: number;
+};
 
 export async function getMemberById(id: string) {
   const supabase = await createServerClient();
@@ -161,6 +180,62 @@ export async function getMonthlyLeaderboard(
   }
 
   return entries;
+}
+
+// Phase 5A: every member, for the manager-only directory page.
+//
+// Like getMemberXP and getMonthlyLeaderboard this read runs on the SERVER-ONLY
+// service-role client: it returns every member's email and XP, and the
+// function behind it is granted to service_role alone (see
+// supabase/migrations/20260917000001_member_directory.sql), so no client role
+// can reach it. The only caller is the session-checked, manager-gated
+// GET /api/members route - which is what makes the service-role client
+// acceptable here rather than a convenience (lib/supabase/admin.ts).
+//
+// No search parameter: the whole roster is a few dozen rows, and the page
+// filters it in the browser. That keeps one query behind the page instead of
+// one per keystroke.
+//
+// Returns null on failure, so the route can answer 500 rather than render an
+// empty roster that looks like the club has no members.
+export async function getMemberDirectory(): Promise<MemberDirectoryRow[] | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase.rpc('get_member_directory');
+
+  if (error || !data) return null;
+
+  // `get_member_directory` is declared `RETURNS TABLE (...)`, so PostgREST
+  // answers with a bare JSON array of row objects and supabase-js resolves that
+  // array directly as `data` - there is no wrapper object. (The Supabase CLI
+  // prints a `{ rows: [...] }`-style envelope for the same function when run by
+  // hand, which is NOT the supabase-js shape; see
+  // tests/member-directory-query-shape.test.mjs, which pins both.)
+  //
+  // Guard the shape explicitly: a non-array here means the database and this
+  // layer disagree, which is an error to report (null), not an empty directory.
+  if (!Array.isArray(data)) return null;
+
+  const rows: MemberDirectoryRow[] = [];
+
+  for (const row of data as unknown[]) {
+    const parsed = memberDirectoryRowSchema.safeParse(row);
+
+    // A row that does not match the function's declared shape means the
+    // database and this layer disagree - an error, not a row to skip.
+    if (!parsed.success) return null;
+
+    rows.push({
+      memberId: parsed.data.member_id,
+      email: parsed.data.email,
+      displayName: parsed.data.display_name,
+      membershipStatus: parsed.data.membership_status,
+      joinedAt: parsed.data.created_at,
+      totalXp: parsed.data.total_xp,
+    });
+  }
+
+  return rows;
 }
 
 export type XpLedgerWrite = {

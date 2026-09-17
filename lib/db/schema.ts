@@ -44,3 +44,20 @@ export const leaderboardRowSchema = z.object({
   // Can be negative when corrective entries outweigh awards in the month.
   xp: z.number().int(),
 });
+
+// Phase 5A: one row of the manager-only member directory, as returned by the
+// get_member_directory function. Snake_case because it mirrors the function's
+// output columns; lib/db/queries.ts maps it to the camelCase shape the API
+// returns. Deliberately no level column — the level is derived from
+// `total_xp` through the `levels` table (lib/xp/levels.ts), so it cannot drift
+// from the thresholds the rest of the app uses.
+export const memberDirectoryRowSchema = z.object({
+  member_id: z.string().uuid(),
+  email: z.string().email(),
+  display_name: z.string().min(1),
+  membership_status: membershipStatusSchema,
+  created_at: z.string(),
+  // COALESCEd in SQL, so a member with no ledger rows is a genuine 0. Can be
+  // negative if corrective entries outweigh awards.
+  total_xp: z.number().int(),
+});

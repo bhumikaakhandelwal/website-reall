@@ -39,6 +39,20 @@ export type DoubledLevel = {
   sort_order: number;
 };
 
+/**
+ * Mirrors `MemberDirectoryRow` from `@/lib/db/queries` - the camelCase shape
+ * the real `lib/db/queries.ts` maps the database's snake_case rows onto. The
+ * route consumes this shape, so the double must match it.
+ */
+export type DoubledDirectoryRow = {
+  memberId: string;
+  email: string;
+  displayName: string;
+  membershipStatus: 'pending' | 'active' | 'inactive';
+  joinedAt: string;
+  totalXp: number;
+};
+
 export const dbState = {
   /** The member the session resolves to, or null when there is none. */
   profile: null as DoubledProfile | null,
@@ -65,6 +79,15 @@ export const dbState = {
   }[],
   /** When true, every leaderboard read simulates a database failure. */
   leaderboardFails: false,
+  /**
+   * Phase 5A: the rows the directory read should return. An empty array is a
+   * genuine empty roster; `directoryFails` is the error path.
+   */
+  directoryRows: [] as DoubledDirectoryRow[],
+  /** Every directory read the route performed. */
+  directoryCalls: 0,
+  /** When true, the directory read simulates a database failure. */
+  directoryFails: false,
 };
 
 export function resetDbState() {
@@ -77,6 +100,9 @@ export function resetDbState() {
   dbState.leaderboardRows = new Map();
   dbState.leaderboardCalls = [];
   dbState.leaderboardFails = false;
+  dbState.directoryRows = [];
+  dbState.directoryCalls = 0;
+  dbState.directoryFails = false;
 }
 
 export async function getMemberProfile(memberId: string) {
@@ -114,4 +140,12 @@ export async function getMonthlyLeaderboard(
 export async function createXpLedgerEntry(entry: XpLedgerWrite) {
   dbState.writes.push(entry);
   return dbState.writeResult;
+}
+
+export async function getMemberDirectory(): Promise<DoubledDirectoryRow[] | null> {
+  dbState.directoryCalls += 1;
+
+  if (dbState.directoryFails) return null;
+
+  return dbState.directoryRows;
 }
