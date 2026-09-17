@@ -1,7 +1,8 @@
 import { createServerClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { memberSchema, levelSchema } from './schema';
+import { memberSchema, levelSchema, leaderboardRowSchema } from './schema';
 import type { LevelDefinition } from '@/lib/xp/levels';
+import type { LeaderboardRow } from '@/lib/xp/leaderboards';
 
 export async function getMemberById(id: string) {
   const supabase = await createServerClient();
@@ -100,6 +101,66 @@ export async function getMemberXP(memberId: string): Promise<number | null> {
   if (error || data === null) return null;
 
   return data as number;
+}
+
+// Phase 4: one leaderboard, aggregated in the database.
+//
+// Like getMemberXP this read runs on the SERVER-ONLY service-role client: the
+// function returns other members' XP and is granted to service_role alone (see
+// supabase/migrations/20260916000001_monthly_leaderboards.sql), so no client
+// role can reach it and the only caller is the session-checked
+// GET /api/leaderboard route.
+//
+// The window is the caller's half-open [start, end) range, and `activityCodes`
+// selects the leaderboard: null counts every ledger entry (overall), otherwise
+// only entries carrying one of those Handbook activity codes (hackathon,
+// open-source). The rows come back already ordered deterministically, so this
+// function never sorts and never loads ledger rows into memory.
+//
+// Returns null on failure, so the route can answer 500 rather than render an
+// empty leaderboard that looks like "nobody earned anything".
+export async function getMonthlyLeaderboard(
+  period: { start: Date; end: Date },
+  activityCodes: readonly string[] | null
+): Promise<LeaderboardRow[] | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase.rpc('get_monthly_leaderboard', {
+    p_period_start: period.start.toISOString(),
+    p_period_end: period.end.toISOString(),
+    p_activity_codes: activityCodes === null ? null : [...activityCodes],
+  });
+
+  if (error || !data) return null;
+
+  // `get_monthly_leaderboard` is declared `RETURNS TABLE (...)`, so PostgREST
+  // answers with a bare JSON array of row objects and supabase-js resolves that
+  // array directly as `data` - there is no wrapper object. (The Supabase CLI
+  // prints a `{ rows: [...] }`-style envelope for the same function when run by
+  // hand, which is NOT the supabase-js shape; see
+  // tests/leaderboard-query-shape.test.mjs, which pins both.)
+  //
+  // Guard the shape explicitly: a non-array here means the database and this
+  // layer disagree, which is an error to report (null), not an empty month.
+  if (!Array.isArray(data)) return null;
+
+  const entries: LeaderboardRow[] = [];
+
+  for (const row of data as unknown[]) {
+    const parsed = leaderboardRowSchema.safeParse(row);
+
+    // A row that does not match the function's declared shape means the
+    // database and this layer disagree - an error, not a row to skip.
+    if (!parsed.success) return null;
+
+    entries.push({
+      memberId: parsed.data.member_id,
+      displayName: parsed.data.display_name,
+      xp: parsed.data.xp,
+    });
+  }
+
+  return entries;
 }
 
 export type XpLedgerWrite = {

@@ -46,14 +46,20 @@ export const xpLevels: XpLevel[] = [
 
 export const leaderboardTypes = [
   {
+    // Phase 4: the id links this display copy to the leaderboard data returned
+    // by GET /api/leaderboard. Nothing else changed - the /xp-system page still
+    // reads only title and description.
+    id: "overall",
     title: "Overall XP Leaderboard",
     description: "Every member, ranked by total XP across all activity.",
   },
   {
+    id: "hackathon",
     title: "Hackathon Leaderboard",
     description: "Ranked by hackathon performance — rounds reached and wins.",
   },
   {
+    id: "open-source",
     title: "Contribution Leaderboard",
     description: "Ranked by open-source project contributions.",
   },
