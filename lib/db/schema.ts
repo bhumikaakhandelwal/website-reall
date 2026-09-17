@@ -32,3 +32,15 @@ export const xpLedgerEntrySchema = z.object({
   reason: z.string().nullable().optional(),
   created_at: z.string(),
 });
+
+// Phase 4: one aggregated row of a monthly leaderboard, as returned by the
+// get_monthly_leaderboard function. Snake_case because it mirrors the
+// function's output columns; lib/db/queries.ts maps it to the camelCase shape
+// the API returns. Deliberately no rank column — ranking is assigned in
+// lib/xp/leaderboards.ts, not in the database.
+export const leaderboardRowSchema = z.object({
+  member_id: z.string().uuid(),
+  display_name: z.string().min(1),
+  // Can be negative when corrective entries outweigh awards in the month.
+  xp: z.number().int(),
+});
