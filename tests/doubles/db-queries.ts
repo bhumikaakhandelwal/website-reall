@@ -53,6 +53,21 @@ export type DoubledDirectoryRow = {
   totalXp: number;
 };
 
+/**
+ * Mirrors `RecentXpEntryRow` from `@/lib/db/queries` - the camelCase shape the
+ * real `lib/db/queries.ts` maps the database's snake_case rows onto. The route
+ * consumes this shape, so the double must match it.
+ */
+export type DoubledRecentEntry = {
+  entryId: number;
+  memberId: string;
+  displayName: string;
+  xpAmount: number;
+  activityCode: string | null;
+  reason: string | null;
+  createdAt: string;
+};
+
 export const dbState = {
   /** The member the session resolves to, or null when there is none. */
   profile: null as DoubledProfile | null,
@@ -88,6 +103,24 @@ export const dbState = {
   directoryCalls: 0,
   /** When true, the directory read simulates a database failure. */
   directoryFails: false,
+  /**
+   * Phase 5C: the net XP the month total should report. null simulates a failed
+   * read; 0 is a genuine empty month, which is why the two are distinct.
+   */
+  monthXp: 0 as number | null,
+  /** Every window the route asked the month total for. */
+  monthXpCalls: [] as { start: Date; end: Date }[],
+  /** When true, the month total read simulates a database failure. */
+  monthXpFails: false,
+  /**
+   * Phase 5C: the rows the recent-entries read should return, newest first -
+   * the double preserves the order it is given, like the database does.
+   */
+  recentEntries: [] as DoubledRecentEntry[],
+  /** Every limit the route passed to the recent-entries read. */
+  recentEntryLimits: [] as number[],
+  /** When true, the recent-entries read simulates a database failure. */
+  recentEntriesFail: false,
 };
 
 export function resetDbState() {
@@ -103,6 +136,12 @@ export function resetDbState() {
   dbState.directoryRows = [];
   dbState.directoryCalls = 0;
   dbState.directoryFails = false;
+  dbState.monthXp = 0;
+  dbState.monthXpCalls = [];
+  dbState.monthXpFails = false;
+  dbState.recentEntries = [];
+  dbState.recentEntryLimits = [];
+  dbState.recentEntriesFail = false;
 }
 
 export async function getMemberProfile(memberId: string) {
@@ -148,4 +187,25 @@ export async function getMemberDirectory(): Promise<DoubledDirectoryRow[] | null
   if (dbState.directoryFails) return null;
 
   return dbState.directoryRows;
+}
+
+export async function getMonthXpTotal(period: {
+  start: Date;
+  end: Date;
+}): Promise<number | null> {
+  dbState.monthXpCalls.push(period);
+
+  if (dbState.monthXpFails) return null;
+
+  return dbState.monthXp;
+}
+
+export async function getRecentXpEntries(
+  limit: number
+): Promise<DoubledRecentEntry[] | null> {
+  dbState.recentEntryLimits.push(limit);
+
+  if (dbState.recentEntriesFail) return null;
+
+  return dbState.recentEntries;
 }

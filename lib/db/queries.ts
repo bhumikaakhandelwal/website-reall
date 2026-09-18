@@ -5,6 +5,7 @@ import {
   levelSchema,
   leaderboardRowSchema,
   memberDirectoryRowSchema,
+  recentXpEntryRowSchema,
 } from './schema';
 import type { LevelDefinition } from '@/lib/xp/levels';
 import type { LeaderboardRow } from '@/lib/xp/leaderboards';
@@ -21,6 +22,22 @@ export type MemberDirectoryRow = {
   membershipStatus: 'pending' | 'active' | 'inactive';
   joinedAt: string;
   totalXp: number;
+};
+
+/**
+ * Phase 5C: one row of the recent-ledger list, as read from the database - the
+ * camelCase shape `getRecentXpEntries` maps the function's snake_case columns
+ * onto. `reason` and `activityCode` are genuinely nullable (a corrective entry
+ * has no activity code), so the dashboard must render a fallback for both.
+ */
+export type RecentXpEntryRow = {
+  entryId: number;
+  memberId: string;
+  displayName: string;
+  xpAmount: number;
+  activityCode: string | null;
+  reason: string | null;
+  createdAt: string;
 };
 
 export async function getMemberById(id: string) {
@@ -236,6 +253,110 @@ export async function getMemberDirectory(): Promise<MemberDirectoryRow[] | null>
   }
 
   return rows;
+}
+
+// Phase 5C: the net XP recorded in the ledger inside a half-open month window,
+// for the manager dashboard's "XP Awarded This Month" card.
+//
+// Like the other privileged reads this runs on the SERVER-ONLY service-role
+// client: the function returns club-wide XP and is granted to service_role
+// alone (see supabase/migrations/20260918000001_manager_dashboard.sql), so the
+// session- and manager-checked GET /api/manager/dashboard route is the only
+// caller.
+//
+// The window is the caller's half-open [start, end), computed in UTC and passed
+// as an explicit range, exactly like getMonthlyLeaderboard - the database does
+// no month arithmetic, because `timestamptz + interval '1 month'` is evaluated
+// in the session timezone and can land on the wrong instant across a DST
+// boundary.
+//
+// This is deliberately NOT a sum over getMonthlyLeaderboard: that function
+// answers "who is winning this month", so it keeps only active members and
+// drops zero rows. A month in which a pending member earned XP would be
+// under-reported by summing it. See the migration comment.
+//
+// Returns null on failure so the route can answer 500. A genuine empty month is
+// 0, not null - the SQL COALESCEs the sum, and the `typeof` guard below keeps a
+// non-numeric response (the database and this layer disagreeing) an error
+// rather than a confident zero.
+export async function getMonthXpTotal(period: {
+  start: Date;
+  end: Date;
+}): Promise<number | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase.rpc('get_month_xp_total', {
+    p_period_start: period.start.toISOString(),
+    p_period_end: period.end.toISOString(),
+  });
+
+  if (error || data === null || data === undefined) return null;
+
+  // `get_month_xp_total` returns a scalar INTEGER, so supabase-js resolves the
+  // number directly as `data` - there is no row wrapper and no `rows` envelope.
+  // An integer check as well as a finite one: the column is INTEGER, so a
+  // fractional value would mean the database and this layer disagree.
+  if (typeof data !== 'number' || !Number.isInteger(data)) return null;
+
+  return data;
+}
+
+// Phase 5C: the most recent ledger entries, newest first, for the manager
+// dashboard's activity list.
+//
+// SERVER-ONLY for the same reason as every other read above: it exposes other
+// members' XP and is granted to service_role alone (see the Phase 5C
+// migration), so the session- and manager-checked API route is the only caller.
+//
+// The limit is applied by the database, not here: the ledger grows without
+// bound and "the last N rows" is an index walk there, not a full read into
+// application memory. The function also clamps the argument to 1..100, so an
+// unexpected value cannot produce a silently empty list or an unbounded read.
+//
+// Returns null on failure - including when a row does not match the function's
+// declared shape, which means the database and this layer disagree and is an
+// error to report rather than a row to skip quietly.
+export async function getRecentXpEntries(
+  limit: number
+): Promise<RecentXpEntryRow[] | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase.rpc('get_recent_xp_entries', {
+    p_limit: limit,
+  });
+
+  if (error || !data) return null;
+
+  // `get_recent_xp_entries` is declared `RETURNS TABLE (...)`, so PostgREST
+  // answers with a bare JSON array of row objects and supabase-js resolves that
+  // array directly as `data` - there is no wrapper object. (The Supabase CLI
+  // prints a `{ rows: [...] }`-style envelope for the same function when run by
+  // hand, which is NOT the supabase-js shape; see
+  // tests/manager-dashboard-query-shape.test.mjs, which pins both.)
+  //
+  // Guard the shape explicitly: a non-array here means the database and this
+  // layer disagree, which is an error to report (null), not an empty history.
+  if (!Array.isArray(data)) return null;
+
+  const entries: RecentXpEntryRow[] = [];
+
+  for (const row of data as unknown[]) {
+    const parsed = recentXpEntryRowSchema.safeParse(row);
+
+    if (!parsed.success) return null;
+
+    entries.push({
+      entryId: parsed.data.entry_id,
+      memberId: parsed.data.member_id,
+      displayName: parsed.data.display_name,
+      xpAmount: parsed.data.xp_amount,
+      activityCode: parsed.data.activity_code,
+      reason: parsed.data.reason,
+      createdAt: parsed.data.created_at,
+    });
+  }
+
+  return entries;
 }
 
 export type XpLedgerWrite = {

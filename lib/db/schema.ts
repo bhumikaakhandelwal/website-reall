@@ -61,3 +61,35 @@ export const memberDirectoryRowSchema = z.object({
   // negative if corrective entries outweigh awards.
   total_xp: z.number().int(),
 });
+
+// Phase 5C: one row of the recent-ledger list on the manager dashboard, as
+// returned by the get_recent_xp_entries function. Snake_case because it mirrors
+// the function's output columns; lib/db/queries.ts maps it to the camelCase
+// shape the API returns.
+export const recentXpEntryRowSchema = z.object({
+  // `xp_ledger.id` is SERIAL, and the only column here that is unique per row -
+  // the dashboard uses it as the list key, since a member can have many entries
+  // and two entries can share a timestamp.
+  entry_id: z.number().int(),
+  member_id: z.string().uuid(),
+  display_name: z.string().min(1),
+  // Signed: negative for a corrective entry. Never zero (the column has a
+  // CHECK constraint), which is why the dashboard can render a +/- sign from
+  // the sign alone.
+  xp_amount: z.number().int().refine((value) => value !== 0, 'XP amount must not be zero'),
+  // Both nullable in the ledger, and both genuinely absent on some rows: a
+  // corrective entry has no activity code, and `reason` predates Phase 3 on
+  // older rows. The dashboard renders a fallback rather than this layer
+  // inventing a value.
+  activity_code: z.string().nullable(),
+  reason: z.string().nullable(),
+  // A TIMESTAMPTZ written by the database in UTC. Rejected here if it is not a
+  // parseable instant, so a malformed row is an error to report rather than a
+  // timestamp the dashboard would render as "Invalid Date".
+  created_at: z
+    .string()
+    .refine(
+      (value) => !Number.isNaN(Date.parse(value)),
+      'created_at must be a parseable timestamp'
+    ),
+});
