@@ -27,6 +27,24 @@ export const adminState = {
   insertResult: { error: null } as {
     error: { code?: string; message: string } | null;
   },
+
+  /**
+   * Phase 7A: what a `.from(...).select(...)` chain should resolve to. Shaped
+   * like a supabase-js response, so a test can point it at a bare array of rows
+   * (what PostgREST returns for a table select) or at anything else it wants
+   * the layer under test to reject.
+   */
+  selectResult: { data: null, error: null } as {
+    data: unknown;
+    error: { message: string } | null;
+  },
+
+  /** Every select chain, recording the table, columns and orderings asked for. */
+  selectCalls: [] as {
+    table: string;
+    columns: string;
+    orders: { column: string; ascending: boolean }[];
+  }[],
 };
 
 export function resetAdminState() {
@@ -34,6 +52,41 @@ export function resetAdminState() {
   adminState.rpcCalls = [];
   adminState.inserts = [];
   adminState.insertResult = { error: null };
+  adminState.selectResult = { data: null, error: null };
+  adminState.selectCalls = [];
+}
+
+/**
+ * A thenable `.select()` chain.
+ *
+ * `await`ing the builder resolves `selectResult`, and every `.order()` is
+ * recorded rather than applied - the point is to assert on what the query layer
+ * ASKED the database for (ordering is the database's job everywhere in this
+ * project), not to reimplement PostgREST.
+ */
+function selectChain(table: string, columns: string) {
+  const call = {
+    table,
+    columns,
+    orders: [] as { column: string; ascending: boolean }[],
+  };
+
+  adminState.selectCalls.push(call);
+
+  const chain = {
+    order(column: string, options?: { ascending?: boolean }) {
+      call.orders.push({ column, ascending: options?.ascending ?? true });
+      return chain;
+    },
+    then(
+      resolve: (value: unknown) => unknown,
+      reject?: (reason: unknown) => unknown
+    ) {
+      return Promise.resolve(adminState.selectResult).then(resolve, reject);
+    },
+  };
+
+  return chain;
 }
 
 export function createAdminClient() {
@@ -48,6 +101,10 @@ export function createAdminClient() {
         async insert(row: unknown) {
           adminState.inserts.push({ table, row });
           return adminState.insertResult;
+        },
+
+        select(columns: string) {
+          return selectChain(table, columns);
         },
       };
     },

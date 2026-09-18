@@ -93,3 +93,49 @@ export const recentXpEntryRowSchema = z.object({
       'created_at must be a parseable timestamp'
     ),
 });
+
+// Phase 7A: the closed vocabulary of club event types.
+//
+// Constrained here AND by a CHECK on `events.event_type`, because this is
+// product vocabulary rather than Handbook data - unlike the XP activity code,
+// which is deliberately left unconstrained in SQL so the Handbook list in
+// lib/xp/activities.ts stays the single source of truth. lib/events/events.ts
+// imports this enum and attaches the display labels, so the two cannot drift.
+export const eventTypeSchema = z.enum([
+  'workshop',
+  'technical-session',
+  'coding-contest',
+  'hackathon',
+  'meeting',
+  'other',
+]);
+
+// Phase 7A: one row of `events`. Snake_case because it mirrors the table's
+// columns; lib/db/queries.ts maps it to the camelCase shape the API returns.
+export const eventRowSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string().min(1),
+  event_type: eventTypeSchema,
+  // A DATE, which PostgREST serializes as a plain 'YYYY-MM-DD' string with no
+  // time and no zone. Checked for shape AND for being a real calendar date, so
+  // a row that says 2026-02-31 is an error to report rather than a date the
+  // page would render as 3 March.
+  event_date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'event_date must be YYYY-MM-DD')
+    .refine((value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)), 'event_date must be a real date'),
+  // Not checked against lib/xp/activities.ts here: this layer validates the
+  // shape of what the database returned, and the route validates the vocabulary
+  // before inserting. A code that is no longer in the Handbook must still be
+  // readable, because events created under an older Handbook are history.
+  activity_code: z.string().min(1),
+  // Null when the creating manager's member row was removed - ON DELETE SET
+  // NULL, so club history outlives the person who entered it.
+  created_by: z.string().uuid().nullable(),
+  created_at: z
+    .string()
+    .refine(
+      (value) => !Number.isNaN(Date.parse(value)),
+      'created_at must be a parseable timestamp'
+    ),
+});

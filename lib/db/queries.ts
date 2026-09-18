@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createServerClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
@@ -6,6 +7,7 @@ import {
   leaderboardRowSchema,
   memberDirectoryRowSchema,
   recentXpEntryRowSchema,
+  eventRowSchema,
 } from './schema';
 import type { LevelDefinition } from '@/lib/xp/levels';
 import type { LeaderboardRow } from '@/lib/xp/leaderboards';
@@ -37,6 +39,24 @@ export type RecentXpEntryRow = {
   xpAmount: number;
   activityCode: string | null;
   reason: string | null;
+  createdAt: string;
+};
+
+/**
+ * Phase 7A: one row of `events`, as read from the database - the camelCase
+ * shape `getEvents` maps the table's snake_case columns onto. The XP amount is
+ * deliberately absent: an event names a Handbook activity code, and the amount
+ * is resolved from lib/xp/activities.ts at award time.
+ */
+export type EventRow = {
+  id: string;
+  title: string;
+  eventType: 'workshop' | 'technical-session' | 'coding-contest' | 'hackathon' | 'meeting' | 'other';
+  /** 'YYYY-MM-DD'. A DATE, not an instant - see lib/db/schema.ts. */
+  eventDate: string;
+  activityCode: string;
+  /** The manager who created it, or null if their member row was removed. */
+  createdBy: string | null;
   createdAt: string;
 };
 
@@ -400,4 +420,114 @@ export async function createXpLedgerEntry(
   }
 
   return { ok: true };
+}
+
+// Phase 7A: every club event, newest first, for the manager-only /events page.
+//
+// Runs on the SERVER-ONLY service-role client, like the xp_ledger write above
+// and unlike the Phase 3-5 reads. Those go through narrow SECURITY DEFINER
+// functions because they aggregate in SQL and because RLS denies the anon
+// client; `events` needs neither - it is a plain table read, and the service-
+// role client already bypasses RLS. What makes that acceptable is the caller:
+// the only one is the session- and manager-checked GET /api/events route. The
+// migration enables RLS on `events` with NO policy, so no browser-facing role
+// can reach the table even holding the publishable key.
+//
+// No filtering, no pagination and no search parameter: a club runs a handful of
+// events a term, so the whole list is a few dozen rows.
+//
+// Ordering is fully deterministic - event_date DESC, then created_at DESC - so
+// two events on the same day never reshuffle between two identical requests.
+// The database does the ordering, as everywhere else in this layer.
+//
+// Returns null on failure - including when a row does not match the table's
+// declared shape, which means the database and this layer disagree and is an
+// error to report rather than a row to skip quietly.
+export async function getEvents(): Promise<EventRow[] | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('events')
+    .select('id, title, event_type, event_date, activity_code, created_by, created_at')
+    .order('event_date', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (error || !data) return null;
+
+  // PostgREST answers a table select with a bare JSON array of row objects, and
+  // supabase-js resolves that array directly as `data` - there is no wrapper
+  // object. Guard it explicitly: a non-array means the database and this layer
+  // disagree, which is an error to report (null), not an empty event list.
+  if (!Array.isArray(data)) return null;
+
+  const events: EventRow[] = [];
+
+  for (const row of data as unknown[]) {
+    const parsed = eventRowSchema.safeParse(row);
+
+    if (!parsed.success) return null;
+
+    events.push({
+      id: parsed.data.id,
+      title: parsed.data.title,
+      eventType: parsed.data.event_type,
+      eventDate: parsed.data.event_date,
+      activityCode: parsed.data.activity_code,
+      createdBy: parsed.data.created_by,
+      createdAt: parsed.data.created_at,
+    });
+  }
+
+  return events;
+}
+
+export type EventWrite = {
+  title: string;
+  eventType: EventRow['eventType'];
+  /** 'YYYY-MM-DD'. */
+  eventDate: string;
+  /** A Handbook activity code from lib/xp/activities.ts. */
+  activityCode: string;
+  /** The creating manager's member id, or null when unknown. */
+  createdBy: string | null;
+};
+
+export type EventWriteResult =
+  | { ok: true; id: string }
+  | { ok: false };
+
+// Phase 7A: create one event.
+//
+// The id is generated HERE rather than by the column's DEFAULT gen_random_uuid()
+// so the insert needs no RETURNING round-trip and the caller learns the id
+// without a second query. The database default stays in place as a safety net
+// for any other insert path.
+//
+// The service-role client is required for the same reason as the xp_ledger
+// write: RLS grants no role an INSERT on `events`. Authorization is therefore
+// the caller's responsibility - every caller MUST have verified the signed
+// session and confirmed the actor is an XP manager (lib/xp/managers.ts).
+//
+// This writes an EVENT only. It writes no XP and touches no ledger: awarding
+// attendance is Phase 7B and is deliberately not implemented here.
+export async function createEvent(entry: EventWrite): Promise<EventWriteResult> {
+  const supabase = createAdminClient();
+
+  const id = randomUUID();
+
+  const { error } = await supabase.from('events').insert({
+    id,
+    title: entry.title,
+    event_type: entry.eventType,
+    event_date: entry.eventDate,
+    activity_code: entry.activityCode,
+    created_by: entry.createdBy,
+  });
+
+  if (error) {
+    console.error('Error writing events row:', error);
+    return { ok: false };
+  }
+
+  return { ok: true, id };
 }

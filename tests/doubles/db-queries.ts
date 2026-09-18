@@ -68,6 +68,21 @@ export type DoubledRecentEntry = {
   createdAt: string;
 };
 
+/**
+ * Mirrors `EventRow` from `@/lib/db/queries` - the camelCase shape the real
+ * `lib/db/queries.ts` maps the `events` table's snake_case columns onto. The
+ * route consumes this shape, so the double must match it.
+ */
+export type DoubledEventRow = {
+  id: string;
+  title: string;
+  eventType: 'workshop' | 'technical-session' | 'coding-contest' | 'hackathon' | 'meeting' | 'other';
+  eventDate: string;
+  activityCode: string;
+  createdBy: string | null;
+  createdAt: string;
+};
+
 export const dbState = {
   /** The member the session resolves to, or null when there is none. */
   profile: null as DoubledProfile | null,
@@ -121,6 +136,28 @@ export const dbState = {
   recentEntryLimits: [] as number[],
   /** When true, the recent-entries read simulates a database failure. */
   recentEntriesFail: false,
+  /**
+   * Phase 7A: the rows the event list read should return, in the order the
+   * database would have ordered them - the double preserves what it is given,
+   * like every other read here.
+   */
+  eventRows: [] as DoubledEventRow[],
+  /** Every event list read the route performed. */
+  eventListCalls: 0,
+  /** When true, the event list read simulates a database failure. */
+  eventsFail: false,
+  /** Every event the route tried to create, in order. */
+  eventWrites: [] as {
+    title: string;
+    eventType: string;
+    eventDate: string;
+    activityCode: string;
+    createdBy: string | null;
+  }[],
+  /** What the event write should answer next. */
+  eventWriteResult: { ok: true, id: '00000000-0000-4000-8000-000000000000' } as
+    | { ok: true; id: string }
+    | { ok: false },
 };
 
 export function resetDbState() {
@@ -142,6 +179,11 @@ export function resetDbState() {
   dbState.recentEntries = [];
   dbState.recentEntryLimits = [];
   dbState.recentEntriesFail = false;
+  dbState.eventRows = [];
+  dbState.eventListCalls = 0;
+  dbState.eventsFail = false;
+  dbState.eventWrites = [];
+  dbState.eventWriteResult = { ok: true, id: '00000000-0000-4000-8000-000000000000' };
 }
 
 export async function getMemberProfile(memberId: string) {
@@ -208,4 +250,24 @@ export async function getRecentXpEntries(
   if (dbState.recentEntriesFail) return null;
 
   return dbState.recentEntries;
+}
+
+export async function getEvents(): Promise<DoubledEventRow[] | null> {
+  dbState.eventListCalls += 1;
+
+  if (dbState.eventsFail) return null;
+
+  return dbState.eventRows;
+}
+
+export async function createEvent(entry: {
+  title: string;
+  eventType: string;
+  eventDate: string;
+  activityCode: string;
+  createdBy: string | null;
+}) {
+  dbState.eventWrites.push(entry);
+
+  return dbState.eventWriteResult;
 }
