@@ -139,3 +139,21 @@ export const eventRowSchema = z.object({
       'created_at must be a parseable timestamp'
     ),
 });
+
+// Phase 7B: one row of `attendance`. Snake_case because it mirrors the table's
+// columns; lib/db/queries.ts maps it to the camelCase shape the API returns.
+export const attendanceRowSchema = z.object({
+  id: z.string().uuid(),
+  event_id: z.string().uuid(),
+  member_id: z.string().uuid(),
+  recorded_at: z
+    .string()
+    .refine(
+      (value) => !Number.isNaN(Date.parse(value)),
+      'recorded_at must be a parseable timestamp'
+    ),
+  // NULL means "not yet awarded". This is the column the whole award is built
+  // on, so it is deliberately nullable here rather than defaulted - a row
+  // without it is a row waiting to be awarded, not a malformed row.
+  xp_ledger_id: z.number().int().nullable(),
+});

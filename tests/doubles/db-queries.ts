@@ -83,6 +83,19 @@ export type DoubledEventRow = {
   createdAt: string;
 };
 
+/**
+ * Mirrors `AttendanceRow` from `@/lib/db/queries` - the camelCase shape the
+ * real `lib/db/queries.ts` maps the `attendance` table's snake_case columns
+ * onto. `xpLedgerId` is null for an attendee who has not been awarded yet.
+ */
+export type DoubledAttendanceRow = {
+  id: string;
+  eventId: string;
+  memberId: string;
+  recordedAt: string;
+  xpLedgerId: number | null;
+};
+
 export const dbState = {
   /** The member the session resolves to, or null when there is none. */
   profile: null as DoubledProfile | null,
@@ -158,6 +171,30 @@ export const dbState = {
   eventWriteResult: { ok: true, id: '00000000-0000-4000-8000-000000000000' } as
     | { ok: true; id: string }
     | { ok: false },
+  /**
+   * Phase 7B: the event `getEventById` should answer, or null for "no such
+   * event". Kept separate from `eventRows` because the attendance page reads
+   * one event by id while the register reads them all.
+   */
+  eventById: null as DoubledEventRow | null,
+  /** Every event id the route asked a single event for. */
+  eventByIdLookups: [] as string[],
+  /** The attendance rows the attendance read should return. */
+  attendanceRows: [] as DoubledAttendanceRow[],
+  /** Every event id the attendance read was asked for. */
+  attendanceReads: [] as string[],
+  /** When true, the attendance read simulates a database failure. */
+  attendanceFails: false,
+  /** Every attendance save the route attempted, in order. */
+  setAttendanceCalls: [] as { eventId: string; memberIds: string[] }[],
+  /** What the attendance save should answer next. */
+  setAttendanceResult: { ok: true, added: 0, removed: 0, keptAwarded: 0 } as
+    | { ok: true; added: number; removed: number; keptAwarded: number }
+    | { ok: false },
+  /** Every award the route attempted, in order. */
+  awardCalls: [] as { eventId: string; xpAmount: number }[],
+  /** What the award should answer next. */
+  awardResult: { ok: true, awarded: 0 } as { ok: true; awarded: number } | { ok: false },
 };
 
 export function resetDbState() {
@@ -184,6 +221,15 @@ export function resetDbState() {
   dbState.eventsFail = false;
   dbState.eventWrites = [];
   dbState.eventWriteResult = { ok: true, id: '00000000-0000-4000-8000-000000000000' };
+  dbState.eventById = null;
+  dbState.eventByIdLookups = [];
+  dbState.attendanceRows = [];
+  dbState.attendanceReads = [];
+  dbState.attendanceFails = false;
+  dbState.setAttendanceCalls = [];
+  dbState.setAttendanceResult = { ok: true, added: 0, removed: 0, keptAwarded: 0 };
+  dbState.awardCalls = [];
+  dbState.awardResult = { ok: true, awarded: 0 };
 }
 
 export async function getMemberProfile(memberId: string) {
@@ -270,4 +316,35 @@ export async function createEvent(entry: {
   dbState.eventWrites.push(entry);
 
   return dbState.eventWriteResult;
+}
+
+export async function getEventById(id: string): Promise<DoubledEventRow | null> {
+  dbState.eventByIdLookups.push(id);
+
+  return dbState.eventById;
+}
+
+export async function getEventAttendance(
+  eventId: string
+): Promise<DoubledAttendanceRow[] | null> {
+  dbState.attendanceReads.push(eventId);
+
+  if (dbState.attendanceFails) return null;
+
+  return dbState.attendanceRows;
+}
+
+export async function setEventAttendance(
+  eventId: string,
+  memberIds: readonly string[]
+) {
+  dbState.setAttendanceCalls.push({ eventId, memberIds: [...memberIds] });
+
+  return dbState.setAttendanceResult;
+}
+
+export async function awardEventAttendance(eventId: string, xpAmount: number) {
+  dbState.awardCalls.push({ eventId, xpAmount });
+
+  return dbState.awardResult;
 }

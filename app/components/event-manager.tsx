@@ -23,6 +23,7 @@
 // without a schema change.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ACTIVITY_OPTIONS,
@@ -504,6 +505,17 @@ export function EventManager() {
                   >
                     {formatEventDate(record.eventDate)}
                   </time>
+
+                  {/* Phase 7B: the way in to taking attendance for this event.
+                      A plain link rather than a nested interactive row, so the
+                      row itself stays non-interactive and the whole target is
+                      one anchor. */}
+                  <Link
+                    href={`/events/${record.id}`}
+                    className="shrink-0 border border-border px-4 py-2 font-mono text-xs tracking-[0.12em] text-foreground transition-colors hover:border-accent hover:text-accent"
+                  >
+                    ATTENDANCE →
+                  </Link>
                 </li>
               ))}
           </ul>
