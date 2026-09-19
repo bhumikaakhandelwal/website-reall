@@ -41,36 +41,20 @@
 import { NextResponse } from 'next/server';
 import {
   getMemberDirectory,
-  getMemberProfile,
   getMonthXpTotal,
   getRecentXpEntries,
 } from '@/lib/db/queries';
-import { getSessionMemberId } from '@/lib/auth/session';
-import { isXpManager } from '@/lib/xp/managers';
+import { requireXpManager } from '@/lib/auth/require-manager';
 import { utcMonthPeriod } from '@/lib/xp/leaderboards';
 import { RECENT_ENTRY_LIMIT, summariseDashboard } from '@/lib/manager/dashboard';
 
 export async function GET() {
   try {
-    const actorId = await getSessionMemberId();
+    // Phase 8D: the shared gate, replacing this route's inlined copy of the
+    // session and allowlist checks.
+    const auth = await requireXpManager();
 
-    if (!actorId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const actor = await getMemberProfile(actorId);
-
-    if (!actor || !actor.success) {
-      // The cookie is signed and unexpired but no longer maps to a member.
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Authorization. The email comes from the member record resolved from the
-    // session, so it cannot be spoofed by the caller. Same allowlist as
-    // POST /api/xp/award and GET /api/members.
-    if (!isXpManager(actor.data.email)) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    if (!auth.ok) return auth.response;
 
     // The current month, as [start, end). Computed once, in UTC, and handed to
     // the database as an explicit range.

@@ -60,6 +60,23 @@ export const memberDirectoryRowSchema = z.object({
   // COALESCEd in SQL, so a member with no ledger rows is a genuine 0. Can be
   // negative if corrective entries outweigh awards.
   total_xp: z.number().int(),
+  // Phase 8E: NULL while the member is active. This is the column the active /
+  // archived split reads - there is no separate status for it, because
+  // `membership_status` already means something else (deactivated, which refuses
+  // sign-in, whereas an archived member must still be able to sign in).
+  archived_at: z.string().nullable(),
+});
+
+// Phase 8E: the row the archive/restore UPDATE returns. Deliberately not the
+// directory shape: an UPDATE returns the `members` columns and cannot compute
+// total_xp, so this mirrors what the statement can actually give back.
+export const memberArchiveRowSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email(),
+  display_name: z.string().min(1),
+  membership_status: membershipStatusSchema,
+  archived_at: z.string().nullable(),
+  archived_by: z.string().uuid().nullable(),
 });
 
 // Phase 5C: one row of the recent-ledger list on the manager dashboard, as

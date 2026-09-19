@@ -1,117 +1,104 @@
-// Minimal application session for Phase 1C approved-email login.
+// Phase 8D: the application session, now backed by Supabase Auth.
 //
-// This is deliberately NOT Supabase Auth. An approved-email login does not
-// create a Supabase Auth user or session, so the application keeps its own
-// small, self-contained session: a signed HTTP-only cookie that carries only
-// the member's id and an expiry timestamp.
+// THIS REPLACES the Phase 1C custom session entirely. Until this phase the
+// application kept its own signed cookie (`dbce_session`) holding a member id,
+// and login consisted of proving you knew an approved email address - there was
+// no password, no OTP, no email verification, and no Supabase Auth user at all.
+// That cookie, its HMAC signing, and the SESSION_SECRET it depended on are gone.
 //
-// SECURITY TRADEOFF (intentional, see docs/BACKEND-IMPLEMENTATION-PLAN.md):
-// knowing an approved email address is sufficient to log in. There is no
-// password, OTP, magic link, or email verification. The session cookie is only
-// as trustworthy as that allowance.
+// WHAT REPLACED IT
 //
-// The cookie is signed with SESSION_SECRET (HMAC-SHA256). No new dependency is
-// required — node:crypto is used directly.
+// Supabase Auth owns the credential and the session. `@supabase/ssr` stores the
+// auth cookies, and this module answers the one question the rest of the
+// application asks: given the current request, WHICH MEMBER IS THIS?
+//
+// The answer is resolved in two steps:
+//
+//   1. Supabase Auth verifies the session and gives us the signed-in user.
+//   2. That user's email is matched against `members` through
+//      lookup_member_id_by_email - the SECURITY DEFINER function the Phase 1C
+//      login already used, reused here rather than replaced.
+//
+// WHY EMAIL IS THE LINK, and not members.auth_user_id: `members.email` is
+// UNIQUE, and the only way to obtain an auth account is the activation flow,
+// which refuses any address that is not already a member. So the two can never
+// disagree. `auth_user_id` is kept for what it is actually for - knowing whether
+// a member has activated - rather than being a second, redundant way to resolve
+// the same identity that could drift from the first.
+//
+// A SESSION IS NOT AN AUTHORIZATION. Being signed in says who someone is, not
+// what they may do. Every caller must still check the membership status and, for
+// manager tools, the manager allowlist - see lib/auth/require-manager.ts.
 
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import { cookies } from 'next/headers';
+import { createServerClient } from '@/lib/supabase/server';
+import { getMemberProfile, lookupMemberIdByEmail } from '@/lib/db/queries';
+import { normalizeEmail } from '@/lib/onboarding/roster';
 
-export const SESSION_COOKIE_NAME = 'dbce_session';
+export type MembershipStatus = 'pending' | 'active' | 'inactive';
 
-// Sessions live for 7 days. Session timeout duration is otherwise undefined.
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
-
-type SessionPayload = {
+export type SessionMember = {
+  /** The `members.id` every other table points at. */
   memberId: string;
-  expiresAt: number; // unix seconds
+  email: string;
+  displayName: string;
+  membershipStatus: MembershipStatus;
+  /** The Supabase Auth user id. */
+  authUserId: string;
 };
 
-function getSecret(): string {
-  const secret = process.env.SESSION_SECRET;
+/**
+ * The member behind the current request, or null.
+ *
+ * Returns the member whatever their membership status, so callers can tell
+ * "nobody is signed in" apart from "this member is deactivated" and say
+ * something useful about the second. Use isActiveMember before granting access.
+ *
+ * Returns null - never throws - when there is no session, when the session is
+ * for an email that is not a member, or when the member row fails validation.
+ * A signed-in auth user with no member row is possible in principle (an account
+ * created directly in the Supabase dashboard) and is treated as "not a member",
+ * which is the safe answer.
+ */
+export async function getSessionMember(): Promise<SessionMember | null> {
+  const supabase = await createServerClient();
 
-  if (!secret) {
-    throw new Error(
-      'SESSION_SECRET is not set — cannot sign or verify member sessions'
-    );
-  }
+  // getUser, not getSession: getUser revalidates the token with Supabase Auth
+  // rather than trusting what the cookie claims.
+  const { data, error } = await supabase.auth.getUser();
 
-  return secret;
+  if (error || !data?.user?.email) return null;
+
+  const email = normalizeEmail(data.user.email);
+
+  const memberId = await lookupMemberIdByEmail(email);
+
+  if (!memberId) return null;
+
+  const member = await getMemberProfile(memberId);
+
+  if (!member || !member.success) return null;
+
+  return {
+    memberId: member.data.id,
+    email: member.data.email,
+    displayName: member.data.display_name,
+    membershipStatus: member.data.membership_status,
+    authUserId: data.user.id,
+  };
 }
 
-function sign(body: string): string {
-  return createHmac('sha256', getSecret()).update(body).digest('base64url');
+/**
+ * Whether this member may use the site.
+ *
+ * A deactivated member can still sign in - the credential is Supabase's, and
+ * revoking it would mean banning the auth account - so the refusal happens here,
+ * at the door, rather than being assumed. 'pending' is allowed through: a member
+ * added by a manager but not yet active is expected to be able to sign in and
+ * see the club.
+ */
+export function isActiveMember(member: SessionMember): boolean {
+  return member.membershipStatus !== 'inactive';
 }
 
-function encodeSession(payload: SessionPayload): string {
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  return `${body}.${sign(body)}`;
-}
-
-// Returns the decoded payload only if the signature is valid and unexpired.
-function decodeSession(token: string): SessionPayload | null {
-  const [body, signature] = token.split('.');
-
-  if (!body || !signature) return null;
-
-  // Constant-time signature comparison.
-  const expected = Buffer.from(sign(body));
-  const provided = Buffer.from(signature);
-
-  if (
-    expected.length !== provided.length ||
-    !timingSafeEqual(expected, provided)
-  ) {
-    return null;
-  }
-
-  try {
-    const payload = JSON.parse(
-      Buffer.from(body, 'base64url').toString('utf8')
-    ) as Partial<SessionPayload>;
-
-    if (
-      typeof payload.memberId !== 'string' ||
-      typeof payload.expiresAt !== 'number' ||
-      payload.expiresAt <= Math.floor(Date.now() / 1000)
-    ) {
-      return null;
-    }
-
-    return { memberId: payload.memberId, expiresAt: payload.expiresAt };
-  } catch {
-    return null;
-  }
-}
-
-// Creates the session cookie. Server-side only; the value is never exposed to
-// client-side JavaScript.
-export async function createSession(memberId: string): Promise<void> {
-  const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
-  const cookieStore = await cookies();
-
-  cookieStore.set(SESSION_COOKIE_NAME, encodeSession({ memberId, expiresAt }), {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    maxAge: SESSION_TTL_SECONDS,
-  });
-}
-
-// Verifies the session server-side and returns the member id, or null.
-export async function getSessionMemberId(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-
-  if (!token) return null;
-
-  const payload = decodeSession(token);
-
-  return payload ? payload.memberId : null;
-}
-
-// Clears the session cookie on logout.
-export async function clearSession(): Promise<void> {
-  const cookieStore = await cookies();
-  cookieStore.delete(SESSION_COOKIE_NAME);
-}
+/** The cookie the Phase 1C session used. Cleared on login; no longer read. */
+export const LEGACY_SESSION_COOKIE_NAME = 'dbce_session';

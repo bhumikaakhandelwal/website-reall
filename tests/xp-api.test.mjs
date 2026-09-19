@@ -135,7 +135,13 @@ test('GET /api/xp/me: a member cannot ask for anyone else', async () => {
   const body = await response.json();
 
   assert.equal(body.memberId, MEMBER.id);
-  assert.deepEqual(dbState.profileLookups, [MEMBER.id]);
+
+  // Every lookup is the session's own id, and the one in the query string is
+  // never consulted. (Phase 8D: the session resolver loads the member, then the
+  // route reads the full profile for its response shape, so the same id appears
+  // twice - what matters is that it is only ever this id.)
+  assert.deepEqual([...new Set(dbState.profileLookups)], [MEMBER.id]);
+  assert.ok(!dbState.profileLookups.includes(BASIL.id));
 });
 
 test('GET /api/xp/me: a manager gets their own XP too, not a lookup endpoint', async () => {
@@ -153,7 +159,10 @@ test('GET /api/xp/me: a manager gets their own XP too, not a lookup endpoint', a
 
   assert.equal(body.memberId, BASIL.id);
   assert.equal(body.totalXp, 5000);
-  assert.deepEqual(dbState.profileLookups, [BASIL.id]);
+
+  // The member id in the query string is never consulted, even for a manager.
+  assert.deepEqual([...new Set(dbState.profileLookups)], [BASIL.id]);
+  assert.ok(!dbState.profileLookups.includes(MEMBER.id));
 });
 
 test('GET /api/xp/me: a zero total is a level 1 member, not an error', async () => {

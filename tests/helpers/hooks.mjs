@@ -35,6 +35,14 @@ DOUBLES.set(
   path.join(root, 'tests/doubles/supabase-admin.ts')
 );
 
+// Phase 8D: the anon-key client bound to the request cookies. Sign-in,
+// sign-out, password update and password reset all go through it now, so the
+// auth routes need to be able to drive those without a Supabase project.
+DOUBLES.set(
+  '@/lib/supabase/server',
+  path.join(root, 'tests/doubles/supabase-server.ts')
+);
+
 function findSourceFile(basePath) {
   const candidates = [
     // `basePath` itself matches a specifier that already carries its

@@ -16,16 +16,18 @@
 
 import { NextResponse } from 'next/server';
 import { getMemberProfile, getMemberXP, getAllLevels } from '@/lib/db/queries';
-import { getSessionMemberId } from '@/lib/auth/session';
+import { requireMember } from '@/lib/auth/require-manager';
 import { resolveLevel } from '@/lib/xp/levels';
 
 export async function GET() {
   try {
-    const memberId = await getSessionMemberId();
+    // Phase 8D: the shared member gate, which resolves the member from the
+    // verified Supabase session and refuses a deactivated one.
+    const auth = await requireMember();
 
-    if (!memberId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    if (!auth.ok) return auth.response;
+
+    const memberId = auth.member.memberId;
 
     const [member, totalXp, levels] = await Promise.all([
       getMemberProfile(memberId),

@@ -24,8 +24,10 @@
 // immediately, rather than the manager having to reload the page.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AwardXpPanel } from "./award-xp-panel";
+import { MemberActions } from "./member-actions";
 
 // Shape of GET /api/members.
 type DirectoryEntry = {
@@ -258,6 +260,15 @@ export function MemberDirectory() {
               ? `${filtered.length} of ${total} members`
               : `${total} ${total === 1 ? "member" : "members"}`}
         </span>
+
+        {/* Phase 8D: the way in to adding a member. It lives here rather than
+            in the global navigation, which is Bhumika's and frozen. */}
+        <Link
+          href="/manager/members/add"
+          className="border border-border px-4 py-2 font-mono text-[10px] tracking-[0.12em] text-foreground transition-colors hover:border-accent hover:text-accent"
+        >
+          ADD MEMBER →
+        </Link>
       </div>
 
       {state.status === "loading" && (
@@ -340,6 +351,13 @@ export function MemberDirectory() {
                 <span className="hidden w-28 shrink-0 text-right font-mono text-xs text-muted lg:block">
                   {formatJoined(entry.joinedAt)}
                 </span>
+
+                {/* Phase 8D: the manager's actions on this member. Never a
+                    delete - the roster is permanent and XP points at it. */}
+                <MemberActions
+                  memberId={entry.memberId}
+                  membershipStatus={entry.membershipStatus}
+                />
               </li>
             ))}
         </ul>

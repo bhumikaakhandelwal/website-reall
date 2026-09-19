@@ -1,67 +1,99 @@
-// The manager gate, in one place.
+// The authorization gates, in one place.
 //
-// Every manager-only endpoint in this application performs the same two
-// server-side checks against the same signed session:
+// Every protected endpoint in this application asks one of two questions, and
+// both are answered here so there is exactly one answer to each:
 //
-//   1. a verified session            -> 401 without one
-//   2. that member is an XP manager  -> 403 for everyone else
+//   requireMember()      - is somebody signed in, and is their membership live?
+//   requireXpManager()   - ...and are they one of the two XP managers?
 //
-// The actor's email comes from the member record resolved from the session
-// cookie, never from the request, so a caller cannot claim to be a manager.
+// A session says WHO someone is; it never says what they may do. Supabase Auth
+// establishes the first; these establish the second.
 //
-// This helper exists because Phase 7B added the fifth and sixth manager-only
-// endpoint, and six copies of a security check is six chances for one to drift.
-// The allowlist itself was always shared (lib/xp/managers.ts); this shares the
-// plumbing around it.
+// PHASE 8D MIGRATED THE LAST HOLD-OUTS. When this helper was added in Phase 7B
+// only the two new event routes used it, and /api/members,
+// /api/manager/dashboard, /api/xp/award and /api/events still inlined the same
+// three steps against the old custom session. Replacing that session meant
+// touching all of them anyway, so they now share this gate too - which is why
+// there is no longer a second copy of the manager check to drift out of step.
 //
-// NOT YET USED EVERYWHERE. /api/members, /api/manager/dashboard, /api/xp/award
-// and /api/events still inline the same three steps. They are covered by tests
-// and were deliberately left alone rather than refactored inside a feature
-// phase; migrating them is a mechanical follow-up. New endpoints should use
-// this.
+// The actor's email comes from the member record resolved from the verified
+// Supabase session, never from the request, so a caller cannot claim to be a
+// manager.
 
 import { NextResponse } from 'next/server';
-import { getMemberProfile } from '@/lib/db/queries';
-import { getSessionMemberId } from '@/lib/auth/session';
+import { getSessionMember, isActiveMember, type SessionMember } from '@/lib/auth/session';
 import { isXpManager } from '@/lib/xp/managers';
 
-export type ManagerAuth =
-  | { ok: true; memberId: string; email: string }
+export type MemberAuth =
+  | { ok: true; member: SessionMember }
   | { ok: false; response: NextResponse };
 
+export type ManagerAuth =
+  | {
+      ok: true;
+      /** The `members.id` every club table points at. */
+      memberId: string;
+      /**
+       * The Supabase Auth user id. NOT the same value as memberId, and the two
+       * are not interchangeable: columns that reference `auth.users(id)` - such
+       * as `members.archived_by` - need THIS one. Passing memberId there is a
+       * foreign-key violation, which is exactly what Phase 8E's first archive
+       * attempt hit.
+       */
+      authUserId: string;
+      email: string;
+    }
+  | { ok: false; response: NextResponse };
+
+const UNAUTHORIZED = { error: 'Unauthorized' };
+const FORBIDDEN = { error: 'Forbidden' };
+const INACTIVE = { error: 'Membership is inactive' };
+
 /**
- * Resolves the signed session to a verified XP manager.
+ * Resolves the verified Supabase session to a member whose membership is live.
  *
  * On failure the caller must return `response` unchanged - it is already the
- * right 401 or 403, and returning it is what keeps every manager-only endpoint
+ * right 401 or 403, and returning it is what keeps every protected endpoint
  * answering identically.
+ *
+ * A deactivated member gets 403 with a distinct error body, not 401. They ARE
+ * signed in - telling them their session ended would be a lie, and would send
+ * them round a login loop that cannot succeed.
+ */
+export async function requireMember(): Promise<MemberAuth> {
+  const member = await getSessionMember();
+
+  if (!member) {
+    return { ok: false, response: NextResponse.json(UNAUTHORIZED, { status: 401 }) };
+  }
+
+  if (!isActiveMember(member)) {
+    return { ok: false, response: NextResponse.json(INACTIVE, { status: 403 }) };
+  }
+
+  return { ok: true, member };
+}
+
+/**
+ * Resolves the verified session to one of the two XP managers.
+ *
+ * Checks the membership status first, so a deactivated manager is refused even
+ * if their address is still on the allowlist - deactivation has to mean
+ * something for managers too.
  */
 export async function requireXpManager(): Promise<ManagerAuth> {
-  const actorId = await getSessionMemberId();
+  const auth = await requireMember();
 
-  if (!actorId) {
-    return {
-      ok: false,
-      response: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
-    };
+  if (!auth.ok) return auth;
+
+  if (!isXpManager(auth.member.email)) {
+    return { ok: false, response: NextResponse.json(FORBIDDEN, { status: 403 }) };
   }
 
-  const actor = await getMemberProfile(actorId);
-
-  if (!actor || !actor.success) {
-    // The cookie is signed and unexpired but no longer maps to a member.
-    return {
-      ok: false,
-      response: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
-    };
-  }
-
-  if (!isXpManager(actor.data.email)) {
-    return {
-      ok: false,
-      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
-    };
-  }
-
-  return { ok: true, memberId: actor.data.id, email: actor.data.email };
+  return {
+    ok: true,
+    memberId: auth.member.memberId,
+    authUserId: auth.member.authUserId,
+    email: auth.member.email,
+  };
 }

@@ -75,6 +75,22 @@ export const adminState = {
     isNull: { column: string; value: unknown }[];
     selectedColumns: string | null;
   }[],
+
+  /**
+   * Phase 8D: what `auth.admin.inviteUserByEmail` should answer. Defaults to a
+   * fresh user id, which is the shape the activation flow records on the member
+   * row.
+   */
+  inviteResult: { data: { user: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } }, error: null } as {
+    data: { user: { id: string } | null } | null;
+    error: { message: string } | null;
+  },
+
+  /** What `auth.resetPasswordForEmail` should answer. */
+  recoverResult: { error: null } as { error: { message: string } | null },
+
+  /** Every auth call this double served, in order. */
+  authCalls: [] as { method: string; args: unknown[] }[],
 };
 
 export function resetAdminState() {
@@ -87,6 +103,12 @@ export function resetAdminState() {
   adminState.selectCalls = [];
   adminState.updateResult = { data: null, error: null };
   adminState.updateCalls = [];
+  adminState.inviteResult = {
+    data: { user: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } },
+    error: null,
+  };
+  adminState.recoverResult = { error: null };
+  adminState.authCalls = [];
 }
 
 /**
@@ -184,6 +206,28 @@ export function createAdminClient() {
     async rpc(fnName: string, args?: unknown) {
       adminState.rpcCalls.push({ fnName, args });
       return adminState.rpcResult;
+    },
+
+    // Phase 8D: the Supabase Auth surface this client reaches. Both calls work
+    // by email and neither carries a password - activation and recovery send a
+    // link the member uses to choose their own.
+    auth: {
+      admin: {
+        async inviteUserByEmail(email: string, options?: unknown) {
+          adminState.authCalls.push({
+            method: 'inviteUserByEmail',
+            args: [email, options],
+          });
+          return adminState.inviteResult;
+        },
+      },
+      async resetPasswordForEmail(email: string, options?: unknown) {
+        adminState.authCalls.push({
+          method: 'resetPasswordForEmail',
+          args: [email, options],
+        });
+        return adminState.recoverResult;
+      },
     },
 
     from(table: string) {

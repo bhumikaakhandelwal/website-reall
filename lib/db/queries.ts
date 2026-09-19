@@ -12,7 +12,9 @@ import {
   eventAttendanceTotalRowSchema,
   xpLedgerFullRowSchema,
   xpLedgerEventLinkRowSchema,
+  memberArchiveRowSchema,
 } from './schema';
+import { activeMembers, archivedMembers } from '@/lib/members/lifecycle';
 import type { LevelDefinition } from '@/lib/xp/levels';
 import type { LeaderboardRow } from '@/lib/xp/leaderboards';
 
@@ -28,7 +30,32 @@ export type MemberDirectoryRow = {
   membershipStatus: 'pending' | 'active' | 'inactive';
   joinedAt: string;
   totalXp: number;
+  /** Phase 8E: null while the member is active. */
+  archivedAt: string | null;
 };
+
+/**
+ * Phase 8E: a member as the archive/restore statements return them.
+ *
+ * Not the directory shape, because an UPDATE returns the `members` columns and
+ * cannot compute `totalXp`. The route reads the directory when it needs the
+ * totals; this is what the write itself can honestly give back.
+ */
+export type MemberArchiveRecord = {
+  memberId: string;
+  email: string;
+  displayName: string;
+  membershipStatus: 'pending' | 'active' | 'inactive';
+  archivedAt: string | null;
+  archivedBy: string | null;
+};
+
+export type MemberArchiveResult =
+  | { ok: true; member: MemberArchiveRecord }
+  // The guard matched no row: the member was already archived (or already
+  // active, for a restore), or no such member exists. The caller tells those
+  // apart with a lookup, which is why it is one outcome rather than three.
+  | { ok: false; outcome: 'no_change' | 'failed' };
 
 /**
  * Phase 5C: one row of the recent-ledger list, as read from the database - the
@@ -338,6 +365,7 @@ export async function getMemberDirectory(): Promise<MemberDirectoryRow[] | null>
       displayName: parsed.data.display_name,
       membershipStatus: parsed.data.membership_status,
       joinedAt: parsed.data.created_at,
+      archivedAt: parsed.data.archived_at,
       totalXp: parsed.data.total_xp,
     });
   }
@@ -982,6 +1010,19 @@ export type XpLedgerEventLink = {
   eventId: string;
 };
 
+/**
+ * Phase 8D: what the activation flow needs to know about an email.
+ *
+ * `hasAuthAccount` is the whole reason the member row carries auth_user_id - it
+ * is the difference between "you are a member, create your password" and "you
+ * already have an account, sign in".
+ */
+export type MemberActivation = {
+  memberId: string;
+  membershipStatus: 'pending' | 'active' | 'inactive';
+  hasAuthAccount: boolean;
+};
+
 // Phase 8C: every XP ledger entry, newest first, for the manager-only explorer.
 //
 // SERVER-ONLY, like every other read here: `xp_ledger` is RLS-protected and the
@@ -1081,4 +1122,295 @@ export async function getXpLedgerEventLinks(): Promise<
   }
 
   return links;
+}
+
+// Phase 8D: the activation lookup for one email.
+//
+// SERVER-ONLY, and it uses the service-role client because
+// get_member_activation is granted to service_role alone - it is the only thing
+// in the application that reads `members.auth_user_id`, which must not be
+// reachable from a browser-facing role.
+//
+// Returns null for "no such member" AND for a read failure. The caller treats
+// both as "not a member", which is the safe answer: the alternative would be to
+// tell someone they are a member on the strength of a failed query.
+export async function getMemberActivation(
+  email: string
+): Promise<MemberActivation | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase.rpc('get_member_activation', {
+    p_email: email,
+  });
+
+  if (error || !data) return null;
+
+  // A set-returning function answers with a bare array; zero rows is "not a
+  // member", not an error.
+  if (!Array.isArray(data) || data.length === 0) return null;
+
+  const row = data[0] as Record<string, unknown>;
+
+  if (typeof row.member_id !== 'string' || typeof row.membership_status !== 'string') {
+    return null;
+  }
+
+  if (
+    row.membership_status !== 'pending' &&
+    row.membership_status !== 'active' &&
+    row.membership_status !== 'inactive'
+  ) {
+    return null;
+  }
+
+  return {
+    memberId: row.member_id,
+    membershipStatus: row.membership_status,
+    hasAuthAccount: row.has_auth_account === true,
+  };
+}
+
+// Phase 8D: record which Supabase Auth account a member signs in with.
+//
+// WRITE-ONCE BY CONSTRUCTION. The `.is('auth_user_id', null)` clause means this
+// can only ever fill an empty link, never repoint one that is already set. That
+// is the second half of "no duplicate Auth accounts": the column is UNIQUE, so
+// two members cannot share an account, and this guard means one member cannot
+// silently acquire a second one.
+//
+// Returns false when nothing was written - already set, or no such member. The
+// caller logs that rather than failing the request, because the account exists
+// and the email has been sent either way; the activation route's fallback
+// handles the next attempt.
+//
+// Uses the service-role client: `members` is RLS-protected and no browser-facing
+// role may write this column.
+export async function setMemberAuthUser(
+  memberId: string,
+  authUserId: string
+): Promise<boolean> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('members')
+    .update({ auth_user_id: authUserId })
+    .eq('id', memberId)
+    .is('auth_user_id', null)
+    .select('id');
+
+  if (error || !Array.isArray(data)) return false;
+
+  return data.length === 1;
+}
+
+/**
+ * Phase 8D: a new member created by a manager.
+ *
+ * `membershipStart` is the day they were added, which is what the roster import
+ * set for the existing 42.
+ */
+export type MemberWrite = {
+  displayName: string;
+  email: string;
+  membershipStatus: 'pending' | 'active' | 'inactive';
+  /** 'YYYY-MM-DD'. */
+  membershipStart: string;
+};
+
+export type MemberWriteResult =
+  | { ok: true; memberId: string }
+  // A UNIQUE violation on members.email. Reported separately so the route can
+  // answer 409 rather than 500, without a pre-flight read that could race.
+  | { ok: false; duplicate: boolean };
+
+// Phase 8D: insert a member. Never creates an auth account and never emails
+// anyone - the new member activates themselves from the login page.
+export async function createMember(
+  entry: MemberWrite
+): Promise<MemberWriteResult> {
+  const supabase = createAdminClient();
+
+  const memberId = randomUUID();
+
+  const { error } = await supabase.from('members').insert({
+    id: memberId,
+    display_name: entry.displayName,
+    email: entry.email,
+    membership_status: entry.membershipStatus,
+    membership_start: entry.membershipStart,
+  });
+
+  if (error) {
+    console.error('Error inserting members row:', error);
+    return { ok: false, duplicate: error.code === '23505' };
+  }
+
+  return { ok: true, memberId };
+}
+
+// Phase 8D: deactivate or reactivate a member.
+//
+// A status change, never a delete. Members are permanent club records that XP
+// and attendance point at, and the phase brief is explicit that they are never
+// removed; `membership_status` is the existing mechanism for this and already
+// allows 'pending', 'active' and 'inactive'.
+//
+// The auth account is deliberately NOT touched. Banning it would be a second,
+// harder-to-reverse way of expressing the same thing, and the application
+// refuses an inactive member at the door (lib/auth/require-manager.ts) either
+// way.
+export async function setMemberStatus(
+  memberId: string,
+  status: 'pending' | 'active' | 'inactive'
+): Promise<boolean> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('members')
+    .update({ membership_status: status })
+    .eq('id', memberId)
+    .select('id');
+
+  if (error || !Array.isArray(data)) return false;
+
+  return data.length === 1;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8E: the member lifecycle
+// ---------------------------------------------------------------------------
+
+/** Maps a `members` row returned by an archive/restore statement. */
+function mapArchiveRow(row: unknown): MemberArchiveRecord | null {
+  const parsed = memberArchiveRowSchema.safeParse(row);
+
+  if (!parsed.success) return null;
+
+  return {
+    memberId: parsed.data.id,
+    email: parsed.data.email,
+    displayName: parsed.data.display_name,
+    membershipStatus: parsed.data.membership_status,
+    archivedAt: parsed.data.archived_at,
+    archivedBy: parsed.data.archived_by,
+  };
+}
+
+// Phase 8E: archive a member.
+//
+// GUARDED, exactly like Phase 8A's event archive: `.is('archived_at', null)`
+// means this can only ever fill an empty archive, never overwrite one. So two
+// managers clicking at once cannot re-stamp the time or the manager, and
+// "archive an already-archived member" is a no-op the caller can report as a
+// conflict rather than a second archive.
+//
+// Returns the updated member, so the route does not need a second read to say
+// what changed.
+//
+// Uses the service-role client: `members` is RLS-protected and no browser-facing
+// role may write these columns.
+export async function archiveMember(
+  memberId: string,
+  archivedBy: string
+): Promise<MemberArchiveResult> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('members')
+    .update({ archived_at: new Date().toISOString(), archived_by: archivedBy })
+    .eq('id', memberId)
+    .is('archived_at', null)
+    .select('id, email, display_name, membership_status, archived_at, archived_by');
+
+  if (error || !Array.isArray(data)) return { ok: false, outcome: 'failed' };
+
+  // The guard matched no row: already archived, or no such member.
+  if (data.length === 0) return { ok: false, outcome: 'no_change' };
+
+  const member = mapArchiveRow(data[0]);
+
+  if (!member) return { ok: false, outcome: 'failed' };
+
+  return { ok: true, member };
+}
+
+// Phase 8E: restore an archived member.
+//
+// Idempotent, and guarded the same way in the opposite direction: the UPDATE
+// only matches a row that IS archived, so restoring an active member changes
+// nothing rather than stamping a restore that never happened. Both columns are
+// cleared together, because a half-cleared archive would read as active while
+// still claiming who archived it.
+//
+// NO HISTORICAL ROW IS TOUCHED. Restoring does not re-award Membership XP, does
+// not re-add attendance, and does not write to the ledger - the member's history
+// was never removed, so there is nothing to put back.
+export async function restoreMember(
+  memberId: string
+): Promise<MemberArchiveResult> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('members')
+    .update({ archived_at: null, archived_by: null })
+    .eq('id', memberId)
+    .not('archived_at', 'is', null)
+    .select('id, email, display_name, membership_status, archived_at, archived_by');
+
+  if (error || !Array.isArray(data)) return { ok: false, outcome: 'failed' };
+
+  if (data.length === 0) return { ok: false, outcome: 'no_change' };
+
+  const member = mapArchiveRow(data[0]);
+
+  if (!member) return { ok: false, outcome: 'failed' };
+
+  return { ok: true, member };
+}
+
+// Phase 8E: the active half of the roster.
+//
+// BOTH HALVES COME FROM THE ONE DIRECTORY READ, which is what stops
+// /manager/members and /members disagreeing about who is on the roster. The
+// split is a pure function over the rows rather than a second query, and it
+// lives in lib/members/lifecycle.ts so it can be asserted on.
+export async function getActiveMembers(): Promise<MemberDirectoryRow[] | null> {
+  const rows = await getMemberDirectory();
+
+  return rows === null ? null : activeMembers(rows);
+}
+
+/** Phase 8E: the archived half of the roster. */
+export async function getArchivedMembers(): Promise<
+  MemberDirectoryRow[] | null
+> {
+  const rows = await getMemberDirectory();
+
+  return rows === null ? null : archivedMembers(rows);
+}
+
+/**
+ * Phase 8E: one member's archive state, for the guards.
+ *
+ * Read from the directory rather than from a dedicated statement, so "who is on
+ * the roster and are they archived" has exactly one answer in this codebase.
+ * The roster is a few dozen rows and is already read whole elsewhere; a second
+ * query returning one column would be a second definition for no gain.
+ *
+ * Returns null both for "no such member" and for a failed read. The guards treat
+ * both as "nothing to refuse on": an award to a member who does not exist is
+ * already caught by the ledger's foreign key, which reports it as a 404.
+ */
+export async function getMemberArchiveState(
+  memberId: string
+): Promise<{ memberId: string; archivedAt: string | null } | null> {
+  const rows = await getMemberDirectory();
+
+  if (!rows) return null;
+
+  const row = rows.find((candidate) => candidate.memberId === memberId);
+
+  if (!row) return null;
+
+  return { memberId: row.memberId, archivedAt: row.archivedAt };
 }
