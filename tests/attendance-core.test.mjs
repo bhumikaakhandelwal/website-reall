@@ -117,6 +117,10 @@ function eventRow(overrides = {}) {
     activityCode: 'membership',
     createdBy: BASIL_ID,
     createdAt: '2026-09-01T10:00:00.000Z',
+    // Phase 8A: the event reads now carry the archive state, and the routes
+    // treat a non-null archivedAt as read-only. Active is the default here.
+    archivedAt: null,
+    archivedBy: null,
     ...overrides,
   };
 }

@@ -155,6 +155,13 @@ export async function PUT(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
+    // Phase 8A: an archived event is read-only, so attendance can no longer be
+    // recorded against it. The existing rows are still readable - GET above is
+    // deliberately unaffected - they just cannot be changed.
+    if (event.archivedAt !== null) {
+      return NextResponse.json({ error: 'Event is archived' }, { status: 409 });
+    }
+
     const result = await setEventAttendance(eventId, parsed.data.memberIds);
 
     if (!result.ok) {

@@ -59,6 +59,10 @@ export type EventRow = {
   /** The manager who created it, or null if their member row was removed. */
   createdBy: string | null;
   createdAt: string;
+  /** Null while the event is active. An archived event is read-only. */
+  archivedAt: string | null;
+  /** The manager who archived it, or null. */
+  archivedBy: string | null;
 };
 
 /**
@@ -75,6 +79,38 @@ export type AttendanceRow = {
   recordedAt: string;
   xpLedgerId: number | null;
 };
+
+// The columns every event read selects, and the mapper they both use. Shared
+// rather than repeated because two reads of the same table that disagree about
+// which columns they want is exactly how a field goes silently missing from one
+// page and not another.
+const EVENT_COLUMNS =
+  'id, title, event_type, event_date, activity_code, created_by, created_at, archived_at, archived_by';
+
+/** Maps one validated `events` row onto the camelCase shape the API returns. */
+function toEventRow(row: {
+  id: string;
+  title: string;
+  event_type: EventRow['eventType'];
+  event_date: string;
+  activity_code: string;
+  created_by: string | null;
+  created_at: string;
+  archived_at: string | null;
+  archived_by: string | null;
+}): EventRow {
+  return {
+    id: row.id,
+    title: row.title,
+    eventType: row.event_type,
+    eventDate: row.event_date,
+    activityCode: row.activity_code,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    archivedAt: row.archived_at,
+    archivedBy: row.archived_by,
+  };
+}
 
 export async function getMemberById(id: string) {
   const supabase = await createServerClient();
@@ -464,7 +500,7 @@ export async function getEvents(): Promise<EventRow[] | null> {
 
   const { data, error } = await supabase
     .from('events')
-    .select('id, title, event_type, event_date, activity_code, created_by, created_at')
+    .select(EVENT_COLUMNS)
     .order('event_date', { ascending: false })
     .order('created_at', { ascending: false });
 
@@ -483,15 +519,7 @@ export async function getEvents(): Promise<EventRow[] | null> {
 
     if (!parsed.success) return null;
 
-    events.push({
-      id: parsed.data.id,
-      title: parsed.data.title,
-      eventType: parsed.data.event_type,
-      eventDate: parsed.data.event_date,
-      activityCode: parsed.data.activity_code,
-      createdBy: parsed.data.created_by,
-      createdAt: parsed.data.created_at,
-    });
+    events.push(toEventRow(parsed.data));
   }
 
   return events;
@@ -564,7 +592,7 @@ export async function getEventById(id: string): Promise<EventRow | null> {
 
   const { data, error } = await supabase
     .from('events')
-    .select('id, title, event_type, event_date, activity_code, created_by, created_at')
+    .select(EVENT_COLUMNS)
     .eq('id', id)
     .maybeSingle();
 
@@ -574,15 +602,7 @@ export async function getEventById(id: string): Promise<EventRow | null> {
 
   if (!parsed.success) return null;
 
-  return {
-    id: parsed.data.id,
-    title: parsed.data.title,
-    eventType: parsed.data.event_type,
-    eventDate: parsed.data.event_date,
-    activityCode: parsed.data.activity_code,
-    createdBy: parsed.data.created_by,
-    createdAt: parsed.data.created_at,
-  };
+  return toEventRow(parsed.data);
 }
 
 // Phase 7B: every attendance row for one event.
@@ -729,4 +749,138 @@ export async function awardEventAttendance(
   }
 
   return { ok: true, awarded: data.length };
+}
+
+export type EventUpdate = {
+  title: string;
+  eventType: EventRow['eventType'];
+  /** 'YYYY-MM-DD'. */
+  eventDate: string;
+  /** A Handbook activity code from lib/xp/activities.ts. */
+  activityCode: string;
+};
+
+// Phase 8A: edit an event's metadata.
+//
+// The `.is('archived_at', null)` clause is the read-only rule, enforced in the
+// statement itself rather than only by the route's earlier check: an archived
+// event matches no row, so the update is a no-op even if the two requests race.
+// `.select('id')` is what makes that observable - without it supabase-js reports
+// only an error, and "nothing was updated" would look identical to success.
+//
+// Returns false when nothing was updated: the event is archived, or it no
+// longer exists. The route has already read the event, so either case means the
+// state changed underneath it.
+//
+// Only metadata is written. An edit never touches attendance or xp_ledger, which
+// is what "preserve the attendance and XP audit trail" means here: renaming an
+// event must not disturb the record of who attended it or what they were paid.
+export async function updateEvent(
+  id: string,
+  update: EventUpdate
+): Promise<boolean> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('events')
+    .update({
+      title: update.title,
+      event_type: update.eventType,
+      event_date: update.eventDate,
+      activity_code: update.activityCode,
+    })
+    .eq('id', id)
+    .is('archived_at', null)
+    .select('id');
+
+  if (error || !Array.isArray(data)) return false;
+
+  return data.length === 1;
+}
+
+// Phase 8A: archive an event, making it read-only.
+//
+// Idempotent by construction: the `.is('archived_at', null)` clause means a
+// second call matches no row and changes nothing, so the original archive time
+// and the manager who set it are preserved rather than overwritten.
+//
+// The timestamp is supplied by the caller rather than by a database default.
+// That is a deliberate exception to this project's usual rule - every other
+// timestamp comes from the database - and it is the reason this is not also a
+// SQL function: an UPDATE with a guard needs no transaction, so adding a
+// function for it would be surface without benefit. The cost is that
+// `archived_at` carries the application clock; for a "when was this archived"
+// marker that is immaterial.
+//
+// Returns false when nothing was archived - already archived, or gone.
+export async function archiveEvent(
+  id: string,
+  archivedBy: string | null
+): Promise<boolean> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('events')
+    .update({
+      archived_at: new Date().toISOString(),
+      archived_by: archivedBy,
+    })
+    .eq('id', id)
+    .is('archived_at', null)
+    .select('id');
+
+  if (error || !Array.isArray(data)) return false;
+
+  return data.length === 1;
+}
+
+export type DeleteEventResult =
+  | { ok: true }
+  | { ok: false; outcome: 'has_attendance'; attendanceCount: number }
+  | { ok: false; outcome: 'not_found' }
+  | { ok: false; outcome: 'failed' };
+
+// Phase 8A: delete an event, but only when nobody was recorded on it.
+//
+// Goes through a function rather than a count-then-delete here, and the reason
+// is the audit trail: `attendance.event_id` is ON DELETE CASCADE, so a delete
+// racing a concurrent attendance insert would destroy the only record of who
+// attended. The function locks the event row first, which closes that window.
+// See the migration.
+//
+// `has_attendance` is reported with the count rather than as a generic failure,
+// because "12 members are recorded on this event" is an explanation and
+// "conflict" is not.
+//
+// Authorization is the caller's responsibility: the function is granted to
+// service_role alone, so every caller MUST have verified the signed session and
+// confirmed the actor is an XP manager (lib/xp/managers.ts).
+export async function deleteEvent(id: string): Promise<DeleteEventResult> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase.rpc('delete_event', { p_event_id: id });
+
+  if (error || !data) return { ok: false, outcome: 'failed' };
+
+  // The function RETURNS TABLE (...), so PostgREST answers with a bare array and
+  // the function always returns exactly one row.
+  if (!Array.isArray(data) || data.length !== 1) {
+    return { ok: false, outcome: 'failed' };
+  }
+
+  const row = data[0] as Record<string, unknown>;
+
+  if (row.outcome === 'deleted') return { ok: true };
+
+  if (row.outcome === 'not_found') return { ok: false, outcome: 'not_found' };
+
+  if (row.outcome === 'has_attendance' && typeof row.attendance_count === 'number') {
+    return {
+      ok: false,
+      outcome: 'has_attendance',
+      attendanceCount: row.attendance_count,
+    };
+  }
+
+  return { ok: false, outcome: 'failed' };
 }

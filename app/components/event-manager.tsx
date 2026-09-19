@@ -37,6 +37,14 @@ import {
   type EventDraft,
   type EventRecord,
 } from "@/lib/events/events";
+import {
+  archiveEvent,
+  deleteEvent,
+  editEvent,
+  formatArchivedDate,
+  isEditable,
+  splitByArchive,
+} from "@/lib/events/lifecycle";
 
 type LoadState =
   | { status: "loading" }
@@ -48,6 +56,18 @@ type SubmitState =
   | { status: "idle" }
   | { status: "submitting" }
   | { status: "success"; title: string; activityLabel: string; xpLabel: string }
+  | { status: "error"; message: string };
+
+/**
+ * Phase 8A: the state of a lifecycle action (edit, archive, delete).
+ *
+ * Carries the event id it belongs to, so only the row being acted on shows as
+ * busy rather than the whole register.
+ */
+type ActionState =
+  | { status: "idle" }
+  | { status: "busy"; eventId: string }
+  | { status: "done"; message: string }
   | { status: "error"; message: string };
 
 const EMPTY_DRAFT: EventDraft = {
@@ -66,6 +86,14 @@ const FIELD_CLASS =
 const LABEL_CLASS =
   "text-xs font-semibold uppercase tracking-[0.16em] text-muted";
 
+const BUTTON_CLASS =
+  "border border-border px-5 py-3 font-mono text-xs tracking-[0.12em] text-foreground transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border disabled:hover:text-foreground";
+
+// The smaller button used inside a register row, so four actions fit without
+// crowding the metadata out.
+const ROW_BUTTON_CLASS =
+  "border border-border px-3 py-2 font-mono text-xs tracking-[0.1em] text-foreground transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border disabled:hover:text-foreground";
+
 export function EventManager() {
   const router = useRouter();
 
@@ -78,6 +106,19 @@ export function EventManager() {
   // Bumped by the retry button, and after a successful create, to re-run the
   // fetch effect below.
   const [attempt, setAttempt] = useState(0);
+
+  // Phase 8A: the lifecycle actions. One action runs at a time and reports on
+  // the row it belongs to, so a slow archive on one event does not make every
+  // other row look busy.
+  const [action, setAction] = useState<ActionState>({ status: "idle" });
+  // The event being edited inline, and the draft being typed into it.
+  const [editing, setEditing] = useState<{ id: string; draft: EventDraft } | null>(
+    null
+  );
+  // The event awaiting a delete confirmation. Deleting is irreversible, so it
+  // takes two clicks - and the confirm text states the attendance rule up
+  // front rather than only explaining it after a refusal.
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const reload = useCallback(() => {
     setAttempt((value) => value + 1);
@@ -186,6 +227,298 @@ export function EventManager() {
     return validation.field === field ? validation.message : null;
   }
 
+  // --- Phase 8A: lifecycle actions ----------------------------------------
+
+  /** Runs an action and folds its outcome into the shared action state. */
+  async function runAction(
+    eventId: string,
+    run: () => Promise<
+      { ok: true; message: string } | { ok: false; kind: string; message: string }
+    >
+  ) {
+    setAction({ status: "busy", eventId });
+
+    const outcome = await run();
+
+    if (outcome.ok) {
+      setAction({ status: "done", message: outcome.message });
+      setConfirmDelete(null);
+      // Refresh so the split, the badges and the archived timestamp are the
+      // server's answer rather than a local guess.
+      reload();
+      return;
+    }
+
+    if (outcome.kind === "unauthorized") {
+      handleUnauthorized();
+      return;
+    }
+
+    setAction({ status: "error", message: outcome.message });
+  }
+
+  function startEditing(record: EventRecord) {
+    setEditing({
+      id: record.id,
+      draft: {
+        title: record.title,
+        eventType: record.eventType,
+        eventDate: record.eventDate,
+        activityCode: record.activityCode,
+      },
+    });
+    setConfirmDelete(null);
+    setAction({ status: "idle" });
+  }
+
+  function updateEditing(field: keyof EventDraft, value: string) {
+    setEditing((current) =>
+      current ? { ...current, draft: { ...current.draft, [field]: value } } : current
+    );
+    setAction({ status: "idle" });
+  }
+
+  function handleEditSave() {
+    if (!editing) return;
+
+    const { id, draft } = editing;
+
+    runAction(id, () => editEvent(id, draft));
+  }
+
+  function handleArchive(record: EventRecord) {
+    runAction(record.id, () => archiveEvent(record.id, record.title));
+  }
+
+  function handleDelete(record: EventRecord) {
+    runAction(record.id, () => deleteEvent(record.id, record.title));
+  }
+
+  /**
+   * One register row, with its lifecycle actions.
+   *
+   * Rendered from one place for both groups so an active and an archived row
+   * cannot drift apart. Whether the row is read-only is asked of the record
+   * itself via isEditable - the same function the split uses - rather than
+   * passed in, so the group a row appears in and the actions it offers are
+   * derived from one answer instead of two that could disagree.
+   */
+  function renderEventRow(record: EventRecord) {
+    const archived = !isEditable(record);
+    const isEditing = editing?.id === record.id;
+    const isBusy = action.status === "busy" && action.eventId === record.id;
+    const isConfirming = confirmDelete === record.id;
+    const draft = isEditing && editing ? editing.draft : null;
+    const editCheck = draft ? validateEventDraft(draft) : null;
+    const editPreview = draft ? activityXpPreview(draft.activityCode) : null;
+
+    return (
+      <li key={record.id} className="border-t border-border">
+        {draft !== null && editCheck !== null ? (
+          <div className="flex flex-col gap-4 px-5 py-5 sm:px-7">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="flex min-w-0 flex-col gap-2">
+                <span className={LABEL_CLASS}>Title</span>
+
+                <input
+                  type="text"
+                  value={draft.title}
+                  onChange={(event) => updateEditing("title", event.target.value)}
+                  autoComplete="off"
+                  className={FIELD_CLASS}
+                />
+              </label>
+
+              <label className="flex min-w-0 flex-col gap-2">
+                <span className={LABEL_CLASS}>Type</span>
+
+                <select
+                  value={draft.eventType}
+                  onChange={(event) => updateEditing("eventType", event.target.value)}
+                  className={FIELD_CLASS}
+                >
+                  <option value="">Select a type</option>
+
+                  {EVENT_TYPES.map((type) => (
+                    <option key={type.code} value={type.code}>
+                      {type.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="flex min-w-0 flex-col gap-2">
+                <span className={LABEL_CLASS}>Date</span>
+
+                <input
+                  type="date"
+                  value={draft.eventDate}
+                  onChange={(event) => updateEditing("eventDate", event.target.value)}
+                  className={FIELD_CLASS}
+                />
+              </label>
+
+              <label className="flex min-w-0 flex-col gap-2">
+                <span className={LABEL_CLASS}>Handbook activity</span>
+
+                <select
+                  value={draft.activityCode}
+                  onChange={(event) =>
+                    updateEditing("activityCode", event.target.value)
+                  }
+                  className={FIELD_CLASS}
+                >
+                  <option value="">Select an activity</option>
+
+                  {ACTIVITY_OPTIONS.map((activity) => (
+                    <option key={activity.code} value={activity.code}>
+                      {activity.label} — {activity.xp} XP
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {!editCheck.ok && (
+              <p className="text-xs text-accent-text">{editCheck.message}</p>
+            )}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={handleEditSave}
+                disabled={isBusy || !editCheck.ok}
+                className={BUTTON_CLASS}
+              >
+                {isBusy ? "SAVING…" : "SAVE CHANGES"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEditing(null);
+                  setAction({ status: "idle" });
+                }}
+                className={BUTTON_CLASS}
+              >
+                CANCEL
+              </button>
+
+              {editPreview && (
+                <span className="font-mono text-xs text-muted">
+                  Attendance awards {editPreview}
+                </span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-col gap-4 px-5 py-4 sm:px-7 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-sm text-foreground sm:text-base">
+                  {record.title}
+                </span>
+
+                <span className="truncate text-xs text-muted">
+                  {eventTypeLabel(record.eventType)} ·{" "}
+                  {formatEventDate(record.eventDate)}
+                  {record.archivedAt
+                    ? ` · archived ${formatArchivedDate(record.archivedAt)}`
+                    : ""}
+                </span>
+              </div>
+
+              <span className="shrink-0">
+                <span className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-xs text-accent-text">
+                  {record.activityCode}
+                </span>
+              </span>
+
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <Link
+                  href={`/events/${record.id}`}
+                  className={ROW_BUTTON_CLASS}
+                >
+                  ATTENDANCE →
+                </Link>
+
+                {/* An archived event is read-only, so it offers no way to change
+                    itself. Deleting is still offered: "read-only" covers the
+                    operations that change an event's data, and an event with no
+                    attendance can be removed rather than trapped forever. */}
+                {!archived && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => startEditing(record)}
+                      disabled={isBusy}
+                      className={ROW_BUTTON_CLASS}
+                    >
+                      EDIT
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleArchive(record)}
+                      disabled={isBusy}
+                      className={ROW_BUTTON_CLASS}
+                    >
+                      ARCHIVE
+                    </button>
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setConfirmDelete(isConfirming ? null : record.id)
+                  }
+                  disabled={isBusy}
+                  className={ROW_BUTTON_CLASS}
+                >
+                  DELETE
+                </button>
+              </div>
+            </div>
+
+            {isConfirming && (
+              <div className="border-t border-border bg-surface px-5 py-4 sm:px-7">
+                <p className="text-sm text-foreground">
+                  Delete &ldquo;{record.title}&rdquo;? This cannot be undone.
+                </p>
+
+                <p className="mt-1 max-w-2xl text-xs leading-5 text-muted">
+                  An event can only be deleted while nobody is recorded on it. If
+                  anyone has been, archive it instead — archiving keeps the
+                  record of who attended and what they were awarded.
+                </p>
+
+                <div className="mt-3 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(record)}
+                    disabled={isBusy}
+                    className={ROW_BUTTON_CLASS}
+                  >
+                    {isBusy ? "DELETING…" : "YES, DELETE"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(null)}
+                    className={ROW_BUTTON_CLASS}
+                  >
+                    CANCEL
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </li>
+    );
+  }
+
   if (state.status === "forbidden") {
     return (
       <section aria-labelledby="events-forbidden" className="mt-section">
@@ -243,6 +576,10 @@ export function EventManager() {
   }
 
   const events = state.status === "ready" ? state.events : null;
+
+  // Phase 8A: the register is two lists. Null while loading, so the skeleton can
+  // tell "not loaded yet" from "loaded and empty".
+  const groups = events === null ? null : splitByArchive(events);
 
   return (
     <>
@@ -437,30 +774,27 @@ export function EventManager() {
         </form>
       </section>
 
-      {/* Event list ------------------------------------------------------- */}
-      <section aria-labelledby="events-list" className="mt-section">
+      {/* Active events ---------------------------------------------------- */}
+      <section aria-labelledby="events-active" className="mt-section">
         <div className="flex items-baseline gap-4">
           <span className="font-mono text-xs text-accent-text">02</span>
 
           <h2
-            id="events-list"
+            id="events-active"
             className="text-3xl font-semibold tracking-[-0.045em] text-foreground sm:text-4xl"
           >
-            The register
+            Active
           </h2>
         </div>
 
-        <div className="mt-8 overflow-hidden rounded-panel border border-border">
-          <div className="flex items-center justify-between gap-4 bg-surface px-5 py-3 text-xs font-semibold uppercase tracking-[0.1em] text-muted sm:px-7">
-            <span className="min-w-0 flex-1">Event</span>
-            <span className="hidden w-40 shrink-0 text-right md:block">
-              Awards
-            </span>
-            <span className="w-28 shrink-0 text-right sm:w-36">Date</span>
-          </div>
+        <p className="mt-4 max-w-2xl text-base leading-7 text-muted">
+          Events still open for attendance. Editing one changes its details only —
+          who attended it and what they were awarded are left exactly as they are.
+        </p>
 
-          <ul aria-busy={events === null}>
-            {events === null &&
+        <div className="mt-8 overflow-hidden rounded-panel border border-border">
+          <ul aria-busy={groups === null}>
+            {groups === null &&
               SKELETON_ROWS.map((row) => (
                 <li
                   key={row}
@@ -472,55 +806,93 @@ export function EventManager() {
                 </li>
               ))}
 
-            {events !== null && events.length === 0 && (
-              <li className="border-t border-border px-5 py-6 text-sm text-muted sm:px-7">
-                No events have been recorded yet.
+            {groups !== null && groups.active.length === 0 && (
+              <li className="px-5 py-6 text-sm text-muted sm:px-7">
+                {events !== null && events.length === 0
+                  ? "No events have been recorded yet."
+                  : "No active events — everything recorded has been archived."}
               </li>
             )}
 
-            {events !== null &&
-              events.map((record) => (
-                <li
-                  key={record.id}
-                  className="flex items-center justify-between gap-4 border-t border-border px-5 py-4 transition-colors hover:bg-accent/5 sm:px-7"
-                >
-                  <div className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-sm text-foreground sm:text-base">
-                      {record.title}
-                    </span>
-                    <span className="truncate text-xs text-muted">
-                      {eventTypeLabel(record.eventType)}
-                    </span>
-                  </div>
-
-                  <span className="hidden w-40 shrink-0 text-right md:block">
-                    <span className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-xs text-accent-text">
-                      {record.activityCode}
-                    </span>
-                  </span>
-
-                  <time
-                    dateTime={record.eventDate}
-                    className="w-28 shrink-0 text-right font-mono text-xs text-muted sm:w-36"
-                  >
-                    {formatEventDate(record.eventDate)}
-                  </time>
-
-                  {/* Phase 7B: the way in to taking attendance for this event.
-                      A plain link rather than a nested interactive row, so the
-                      row itself stays non-interactive and the whole target is
-                      one anchor. */}
-                  <Link
-                    href={`/events/${record.id}`}
-                    className="shrink-0 border border-border px-4 py-2 font-mono text-xs tracking-[0.12em] text-foreground transition-colors hover:border-accent hover:text-accent"
-                  >
-                    ATTENDANCE →
-                  </Link>
-                </li>
-              ))}
+            {groups !== null &&
+              groups.active.map((record) => renderEventRow(record))}
           </ul>
         </div>
       </section>
+
+      {/* Archived events -------------------------------------------------- */}
+      <section aria-labelledby="events-archived" className="mt-section">
+        <div className="flex items-baseline gap-4">
+          <span className="font-mono text-xs text-accent-text">03</span>
+
+          <h2
+            id="events-archived"
+            className="text-3xl font-semibold tracking-[-0.045em] text-foreground sm:text-4xl"
+          >
+            Archived
+          </h2>
+        </div>
+
+        <p className="mt-4 max-w-2xl text-base leading-7 text-muted">
+          Finished events, kept for the record. They are read-only: their
+          attendance and the XP awarded against them are unchanged and stay
+          visible.
+        </p>
+
+        <div className="mt-8 overflow-hidden rounded-panel border border-border">
+          <ul aria-busy={groups === null}>
+            {groups === null &&
+              SKELETON_ROWS.map((row) => (
+                <li
+                  key={row}
+                  aria-hidden="true"
+                  className="flex items-center justify-between gap-4 border-t border-border px-5 py-4 sm:px-7"
+                >
+                  <span className="h-4 w-40 animate-pulse rounded bg-muted" />
+                  <span className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                </li>
+              ))}
+
+            {groups !== null && groups.archived.length === 0 && (
+              <li className="px-5 py-6 text-sm text-muted sm:px-7">
+                No events have been archived.
+              </li>
+            )}
+
+            {groups !== null &&
+              groups.archived.map((record) => renderEventRow(record))}
+          </ul>
+        </div>
+      </section>
+
+      {/* Action outcome --------------------------------------------------- */}
+      {action.status === "done" && (
+        <div
+          role="status"
+          className="mt-section rounded-panel border border-border bg-accent/10 px-5 py-5 sm:px-7"
+        >
+          <p className="font-mono text-xs uppercase tracking-[0.16em] text-accent-text">
+            Done
+          </p>
+
+          <p className="mt-2 text-sm text-foreground">{action.message}</p>
+        </div>
+      )}
+
+      {action.status === "error" && (
+        <div
+          role="alert"
+          className="mt-section rounded-panel border border-border bg-surface px-5 py-5 sm:px-7"
+        >
+          <p className="font-mono text-xs uppercase tracking-[0.16em] text-accent-text">
+            Not done
+          </p>
+
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-foreground">
+            {action.message}
+          </p>
+        </div>
+      )}
     </>
   );
 }

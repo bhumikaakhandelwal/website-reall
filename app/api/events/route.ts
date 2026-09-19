@@ -31,29 +31,11 @@
 // lib/xp/activities.ts at award time, so a client can never choose a value.
 
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
 import { createEvent, getEvents, getMemberProfile } from '@/lib/db/queries';
 import { getSessionMemberId } from '@/lib/auth/session';
 import { isXpManager } from '@/lib/xp/managers';
 import { getXpActivity } from '@/lib/xp/activities';
-import { eventTypeSchema } from '@/lib/db/schema';
-import { EVENT_TITLE_MAX, isCalendarDate } from '@/lib/events/events';
-
-// A strict object: an unknown key is a 400 rather than being silently dropped,
-// so a client sending `xpAmount` learns that this endpoint does not accept one.
-const createSchema = z.strictObject({
-  title: z.string().trim().min(1).max(EVENT_TITLE_MAX),
-  // The shared enum, so the accepted vocabulary cannot drift from the CHECK
-  // constraint on events.event_type.
-  eventType: eventTypeSchema,
-  // Shape first, then the real calendar check - the regex alone would accept
-  // 2026-02-31, which is a date the manager did not type.
-  eventDate: z
-    .string()
-    .trim()
-    .refine(isCalendarDate, 'eventDate must be a real calendar date'),
-  activityCode: z.string().trim().min(1).max(64),
-});
+import { eventBodySchema } from '@/lib/events/request';
 
 /** Resolves the session's manager email, or the response to return instead. */
 async function authorize(): Promise<
@@ -123,7 +105,7 @@ export async function POST(request: Request) {
     if (!auth.ok) return auth.response;
 
     const body = await request.json().catch(() => null);
-    const parsed = createSchema.safeParse(body);
+    const parsed = eventBodySchema.safeParse(body);
 
     if (!parsed.success) {
       return NextResponse.json(
