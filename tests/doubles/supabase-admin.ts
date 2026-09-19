@@ -53,6 +53,7 @@ export const adminState = {
     table: string;
     columns: string;
     eqs: { column: string; value: unknown }[];
+    nots: { column: string; operator: string; value: unknown }[];
     orders: { column: string; ascending: boolean }[];
   }[],
 
@@ -101,6 +102,7 @@ function selectChain(table: string, columns: string) {
     table,
     columns,
     eqs: [] as { column: string; value: unknown }[],
+    nots: [] as { column: string; operator: string; value: unknown }[],
     orders: [] as { column: string; ascending: boolean }[],
   };
 
@@ -113,6 +115,10 @@ function selectChain(table: string, columns: string) {
     },
     eq(column: string, value: unknown) {
       call.eqs.push({ column, value });
+      return chain;
+    },
+    not(column: string, operator: string, value: unknown) {
+      call.nots.push({ column, operator, value });
       return chain;
     },
     maybeSingle() {

@@ -10,6 +10,8 @@ import {
   eventRowSchema,
   attendanceRowSchema,
   eventAttendanceTotalRowSchema,
+  xpLedgerFullRowSchema,
+  xpLedgerEventLinkRowSchema,
 } from './schema';
 import type { LevelDefinition } from '@/lib/xp/levels';
 import type { LeaderboardRow } from '@/lib/xp/leaderboards';
@@ -953,4 +955,130 @@ export async function getEventAttendanceTotals(): Promise<
   }
 
   return totals;
+}
+
+/**
+ * Phase 8C: one full row of `xp_ledger`, as read from the database - the
+ * camelCase shape `getXpLedgerEntries` maps the table's snake_case columns onto.
+ *
+ * Deliberately carries no member name and no event: the name is joined in
+ * application code from the roster the directory already reads, and the event
+ * comes from `getXpLedgerEventLinks`. Both joins are done in
+ * lib/manager/ledger.ts, which is a plain module the tests can reach.
+ */
+export type XpLedgerFullRow = {
+  entryId: number;
+  memberId: string;
+  xpAmount: number;
+  /** Null for a corrective entry, which is how the explorer identifies one. */
+  activityCode: string | null;
+  reason: string | null;
+  createdAt: string;
+};
+
+/** Phase 8C: which event a ledger entry was awarded through. */
+export type XpLedgerEventLink = {
+  xpLedgerId: number;
+  eventId: string;
+};
+
+// Phase 8C: every XP ledger entry, newest first, for the manager-only explorer.
+//
+// SERVER-ONLY, like every other read here: `xp_ledger` is RLS-protected and the
+// service-role client is the only way in, and the only caller is the session-
+// and manager-checked GET /api/manager/ledger route.
+//
+// NO LIMIT, and that is the point of the page - it shows the whole audit trail,
+// not the most recent slice that Phase 5C's dashboard shows. The ledger is the
+// club's permanent record and a club accumulates a few hundred entries a year,
+// so reading it whole is cheaper than a paginated API nobody would use.
+//
+// Ordering is the database's job and fully deterministic - created_at DESC, then
+// id DESC - so the explorer's default "newest first" cannot reshuffle between
+// two identical requests, including when several entries share a timestamp.
+// (`id` is SERIAL, so it is a strictly increasing insertion counter.)
+//
+// Returns null on failure - including when a row does not match the declared
+// shape - so the route can answer 500 rather than render a truncated ledger.
+export async function getXpLedgerEntries(): Promise<XpLedgerFullRow[] | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('xp_ledger')
+    .select('id, user_id, xp_amount, activity_code, reason, created_at')
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false });
+
+  if (error || !data) return null;
+
+  // PostgREST answers a table select with a bare JSON array of row objects, and
+  // supabase-js resolves that array directly as `data`. Guard it explicitly: a
+  // non-array means the database and this layer disagree, which is an error to
+  // report, not an empty ledger.
+  if (!Array.isArray(data)) return null;
+
+  const entries: XpLedgerFullRow[] = [];
+
+  for (const row of data as unknown[]) {
+    const parsed = xpLedgerFullRowSchema.safeParse(row);
+
+    if (!parsed.success) return null;
+
+    entries.push({
+      entryId: parsed.data.id,
+      memberId: parsed.data.user_id,
+      xpAmount: parsed.data.xp_amount,
+      activityCode: parsed.data.activity_code,
+      reason: parsed.data.reason,
+      createdAt: parsed.data.created_at,
+    });
+  }
+
+  return entries;
+}
+
+// Phase 8C: the link from each awarded ledger entry back to the event it came
+// from.
+//
+// There is no column for this. `xp_ledger` does not reference `events`, because
+// XP is recorded against a MEMBER and an event is only one of the several ways
+// it can be earned. The link runs the other way: Phase 7B's award writes an
+// attendance row per attendee and stores the new ledger id on it, so
+// `attendance.xp_ledger_id` is the only record of which event an entry came
+// from. This reads that mapping, and the explorer joins it in application code.
+//
+// Only LINKED rows are read (`.not('xp_ledger_id', 'is', null)`), so an event
+// whose attendance has not been awarded yet contributes nothing - there is no
+// ledger entry for it to point at.
+//
+// Returns null on failure, so the route can answer 500 rather than show every
+// entry as having no event.
+export async function getXpLedgerEventLinks(): Promise<
+  XpLedgerEventLink[] | null
+> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('attendance')
+    .select('xp_ledger_id, event_id')
+    .not('xp_ledger_id', 'is', null);
+
+  if (error || !data) return null;
+
+  if (!Array.isArray(data)) return null;
+
+  const links: XpLedgerEventLink[] = [];
+
+  for (const row of data as unknown[]) {
+    const parsed = xpLedgerEventLinkRowSchema.safeParse(row);
+
+    if (!parsed.success) return null;
+
+    links.push({
+      xpLedgerId: parsed.data.xp_ledger_id,
+      eventId: parsed.data.event_id,
+    });
+  }
+
+  return links;
 }
