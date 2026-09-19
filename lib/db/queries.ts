@@ -9,6 +9,7 @@ import {
   recentXpEntryRowSchema,
   eventRowSchema,
   attendanceRowSchema,
+  eventAttendanceTotalRowSchema,
 } from './schema';
 import type { LevelDefinition } from '@/lib/xp/levels';
 import type { LeaderboardRow } from '@/lib/xp/leaderboards';
@@ -78,6 +79,21 @@ export type AttendanceRow = {
   memberId: string;
   recordedAt: string;
   xpLedgerId: number | null;
+};
+
+/**
+ * Phase 8B: one event's attendance totals, as read from the database - the
+ * camelCase shape `getEventAttendanceTotals` maps the function's snake_case
+ * columns onto.
+ *
+ * Only events with at least one attendance record appear. An absent row means
+ * zero, which is why the analytics page joins these onto the event list rather
+ * than treating them as the list.
+ */
+export type EventAttendanceTotal = {
+  eventId: string;
+  attendanceCount: number;
+  xpAwarded: number;
 };
 
 // The columns every event read selects, and the mapper they both use. Shared
@@ -883,4 +899,58 @@ export async function deleteEvent(id: string): Promise<DeleteEventResult> {
   }
 
   return { ok: false, outcome: 'failed' };
+}
+
+// Phase 8B: per-event attendance totals, for the manager analytics page.
+//
+// SERVER-ONLY, like every other read here: the function is granted to
+// service_role alone, so the only caller is the session- and manager-checked
+// GET /api/manager/analytics route.
+//
+// READ-ONLY by construction. The function is STABLE and writes nothing, which is
+// what "keep analytics read-only" means structurally rather than by convention -
+// there is no write path to accidentally reach from this page.
+//
+// Returns one row per event that HAS attendance, bounded by the number of events
+// rather than by the number of attendance records. That bound is the whole
+// reason this is a function rather than an application-side grouping: the XP
+// figure is a SUM across a join into a table that grows forever.
+//
+// The caller joins these onto the event list from getEvents(), which is the
+// authority for which events exist. An event with no row here has zero
+// attendance, not missing data.
+//
+// Returns null on failure - including when a row does not match the declared
+// shape - so the route can answer 500 rather than render every figure as zero.
+export async function getEventAttendanceTotals(): Promise<
+  EventAttendanceTotal[] | null
+> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase.rpc('get_event_attendance_totals');
+
+  if (error || !data) return null;
+
+  // The function is declared `RETURNS TABLE (...)`, so PostgREST answers with a
+  // bare JSON array of row objects and supabase-js resolves that array directly
+  // as `data` - there is no wrapper object. Guard it explicitly: a non-array
+  // means the database and this layer disagree, which is an error to report,
+  // not an event with no attendance.
+  if (!Array.isArray(data)) return null;
+
+  const totals: EventAttendanceTotal[] = [];
+
+  for (const row of data as unknown[]) {
+    const parsed = eventAttendanceTotalRowSchema.safeParse(row);
+
+    if (!parsed.success) return null;
+
+    totals.push({
+      eventId: parsed.data.event_id,
+      attendanceCount: parsed.data.attendance_count,
+      xpAwarded: parsed.data.xp_awarded,
+    });
+  }
+
+  return totals;
 }

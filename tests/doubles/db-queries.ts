@@ -99,6 +99,17 @@ export type DoubledAttendanceRow = {
   xpLedgerId: number | null;
 };
 
+/**
+ * Mirrors `EventAttendanceTotal` from `@/lib/db/queries` - the camelCase shape
+ * the real `lib/db/queries.ts` maps the get_event_attendance_totals function's
+ * snake_case columns onto. Only events WITH attendance appear.
+ */
+export type DoubledAttendanceTotal = {
+  eventId: string;
+  attendanceCount: number;
+  xpAwarded: number;
+};
+
 export const dbState = {
   /** The member the session resolves to, or null when there is none. */
   profile: null as DoubledProfile | null,
@@ -222,6 +233,16 @@ export const dbState = {
     | { ok: false; outcome: 'has_attendance'; attendanceCount: number }
     | { ok: false; outcome: 'not_found' }
     | { ok: false; outcome: 'failed' },
+  /**
+   * Phase 8B: the per-event attendance totals the analytics read should return.
+   * Only events WITH attendance belong here, mirroring the function's inner
+   * join.
+   */
+  attendanceTotals: [] as DoubledAttendanceTotal[],
+  /** Every attendance-totals read the route performed. */
+  attendanceTotalsCalls: 0,
+  /** When true, the attendance-totals read simulates a database failure. */
+  attendanceTotalsFail: false,
 };
 
 export function resetDbState() {
@@ -263,6 +284,9 @@ export function resetDbState() {
   dbState.archiveEventResult = true;
   dbState.deleteEventCalls = [];
   dbState.deleteEventResult = { ok: true };
+  dbState.attendanceTotals = [];
+  dbState.attendanceTotalsCalls = 0;
+  dbState.attendanceTotalsFail = false;
 }
 
 export async function getMemberProfile(memberId: string) {
@@ -406,4 +430,14 @@ export async function deleteEvent(id: string) {
   dbState.deleteEventCalls.push(id);
 
   return dbState.deleteEventResult;
+}
+
+export async function getEventAttendanceTotals(): Promise<
+  DoubledAttendanceTotal[] | null
+> {
+  dbState.attendanceTotalsCalls += 1;
+
+  if (dbState.attendanceTotalsFail) return null;
+
+  return dbState.attendanceTotals;
 }
