@@ -47,6 +47,8 @@ const EVENT_ROW = {
   activity_code: 'membership',
   created_by: MEMBER_ID,
   created_at: '2026-09-01T10:00:00.000Z',
+  archived_at: null,
+  archived_by: null,
 };
 
 const EVENT_EXPECTED = {
@@ -57,6 +59,8 @@ const EVENT_EXPECTED = {
   activityCode: 'membership',
   createdBy: MEMBER_ID,
   createdAt: '2026-09-01T10:00:00.000Z',
+  archivedAt: null,
+  archivedBy: null,
 };
 
 const ATTENDANCE_ROW = {
@@ -91,7 +95,7 @@ test('getEventById asks for the declared columns filtered by id', async () => {
   assert.strictEqual(call.table, 'events');
   assert.strictEqual(
     call.columns,
-    'id, title, event_type, event_date, activity_code, created_by, created_at'
+    'id, title, event_type, event_date, activity_code, created_by, created_at, archived_at, archived_by'
   );
   assert.deepStrictEqual(call.eqs, [{ column: 'id', value: EVENT_ID }]);
 });

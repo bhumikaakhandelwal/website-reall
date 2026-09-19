@@ -55,6 +55,25 @@ export const adminState = {
     eqs: { column: string; value: unknown }[];
     orders: { column: string; ascending: boolean }[];
   }[],
+
+  /**
+   * Phase 8A: what an `.update(...).eq(...).is(...).select(...)` chain should
+   * resolve to - the rows the update affected, which is how the query layer
+   * tells "updated" from "matched nothing".
+   */
+  updateResult: { data: null, error: null } as {
+    data: unknown;
+    error: { message: string } | null;
+  },
+
+  /** Every update chain, recording the patch and the filters it carried. */
+  updateCalls: [] as {
+    table: string;
+    patch: Record<string, unknown>;
+    eqs: { column: string; value: unknown }[];
+    isNull: { column: string; value: unknown }[];
+    selectedColumns: string | null;
+  }[],
 };
 
 export function resetAdminState() {
@@ -65,6 +84,8 @@ export function resetAdminState() {
   adminState.selectResult = { data: null, error: null };
   adminState.singleResult = { data: null, error: null };
   adminState.selectCalls = [];
+  adminState.updateResult = { data: null, error: null };
+  adminState.updateCalls = [];
 }
 
 /**
@@ -108,6 +129,50 @@ function selectChain(table: string, columns: string) {
   return chain;
 }
 
+/**
+ * A thenable `.update()` chain.
+ *
+ * Records the patch and every filter, and resolves `updateResult` - the rows
+ * the update affected. That result is the point: the query layer uses
+ * `.select()` to distinguish "the row was updated" from "no row matched the
+ * guard", which is how the archived read-only rule is enforced in the statement
+ * rather than only in the route.
+ */
+function updateChain(table: string, patch: Record<string, unknown>) {
+  const call = {
+    table,
+    patch,
+    eqs: [] as { column: string; value: unknown }[],
+    isNull: [] as { column: string; value: unknown }[],
+    selectedColumns: null as string | null,
+  };
+
+  adminState.updateCalls.push(call);
+
+  const chain = {
+    eq(column: string, value: unknown) {
+      call.eqs.push({ column, value });
+      return chain;
+    },
+    is(column: string, value: unknown) {
+      call.isNull.push({ column, value });
+      return chain;
+    },
+    select(columns: string) {
+      call.selectedColumns = columns;
+      return chain;
+    },
+    then(
+      resolve: (value: unknown) => unknown,
+      reject?: (reason: unknown) => unknown
+    ) {
+      return Promise.resolve(adminState.updateResult).then(resolve, reject);
+    },
+  };
+
+  return chain;
+}
+
 export function createAdminClient() {
   return {
     async rpc(fnName: string, args?: unknown) {
@@ -124,6 +189,10 @@ export function createAdminClient() {
 
         select(columns: string) {
           return selectChain(table, columns);
+        },
+
+        update(patch: Record<string, unknown>) {
+          return updateChain(table, patch);
         },
       };
     },

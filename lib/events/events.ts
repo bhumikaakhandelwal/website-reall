@@ -203,6 +203,14 @@ export type EventRecord = {
   activityCode: string;
   createdBy: string | null;
   createdAt: string;
+  /**
+   * Phase 8A: null while the event is active. An archived event is read-only -
+   * see isEditable in lib/events/lifecycle.ts, which is the one place that
+   * question is answered.
+   */
+  archivedAt: string | null;
+  /** The manager who archived it, or null. */
+  archivedBy: string | null;
 };
 
 export type ListEventsOutcome =

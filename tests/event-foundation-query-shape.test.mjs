@@ -32,6 +32,8 @@ const ROW = {
   activity_code: 'technical-session',
   created_by: MEMBER_ID,
   created_at: '2026-09-10T10:00:00.000Z',
+  archived_at: null,
+  archived_by: null,
 };
 
 const EXPECTED = {
@@ -42,6 +44,8 @@ const EXPECTED = {
   activityCode: 'technical-session',
   createdBy: MEMBER_ID,
   createdAt: '2026-09-10T10:00:00.000Z',
+  archivedAt: null,
+  archivedBy: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -68,7 +72,7 @@ test('getEvents asks for the declared columns, newest first', async () => {
   assert.strictEqual(call.table, 'events');
   assert.strictEqual(
     call.columns,
-    'id, title, event_type, event_date, activity_code, created_by, created_at'
+    'id, title, event_type, event_date, activity_code, created_by, created_at, archived_at, archived_by'
   );
 
   // Ordering is the database's job, as everywhere else in this layer: two

@@ -81,6 +81,9 @@ export type DoubledEventRow = {
   activityCode: string;
   createdBy: string | null;
   createdAt: string;
+  /** Phase 8A: null while the event is active. */
+  archivedAt: string | null;
+  archivedBy: string | null;
 };
 
 /**
@@ -195,6 +198,30 @@ export const dbState = {
   awardCalls: [] as { eventId: string; xpAmount: number }[],
   /** What the award should answer next. */
   awardResult: { ok: true, awarded: 0 } as { ok: true; awarded: number } | { ok: false },
+  /** Phase 8A: every event edit the route attempted, in order. */
+  updateEventCalls: [] as {
+    id: string;
+    update: {
+      title: string;
+      eventType: string;
+      eventDate: string;
+      activityCode: string;
+    };
+  }[],
+  /** What the edit should answer next - false means the guard matched no row. */
+  updateEventResult: true,
+  /** Every archive the route attempted, in order. */
+  archiveEventCalls: [] as { id: string; archivedBy: string | null }[],
+  /** What the archive should answer next. */
+  archiveEventResult: true,
+  /** Every delete the route attempted, in order. */
+  deleteEventCalls: [] as string[],
+  /** What the delete should answer next. */
+  deleteEventResult: { ok: true } as
+    | { ok: true }
+    | { ok: false; outcome: 'has_attendance'; attendanceCount: number }
+    | { ok: false; outcome: 'not_found' }
+    | { ok: false; outcome: 'failed' },
 };
 
 export function resetDbState() {
@@ -230,6 +257,12 @@ export function resetDbState() {
   dbState.setAttendanceResult = { ok: true, added: 0, removed: 0, keptAwarded: 0 };
   dbState.awardCalls = [];
   dbState.awardResult = { ok: true, awarded: 0 };
+  dbState.updateEventCalls = [];
+  dbState.updateEventResult = true;
+  dbState.archiveEventCalls = [];
+  dbState.archiveEventResult = true;
+  dbState.deleteEventCalls = [];
+  dbState.deleteEventResult = { ok: true };
 }
 
 export async function getMemberProfile(memberId: string) {
@@ -347,4 +380,30 @@ export async function awardEventAttendance(eventId: string, xpAmount: number) {
   dbState.awardCalls.push({ eventId, xpAmount });
 
   return dbState.awardResult;
+}
+
+export async function updateEvent(
+  id: string,
+  update: {
+    title: string;
+    eventType: string;
+    eventDate: string;
+    activityCode: string;
+  }
+) {
+  dbState.updateEventCalls.push({ id, update });
+
+  return dbState.updateEventResult;
+}
+
+export async function archiveEvent(id: string, archivedBy: string | null) {
+  dbState.archiveEventCalls.push({ id, archivedBy });
+
+  return dbState.archiveEventResult;
+}
+
+export async function deleteEvent(id: string) {
+  dbState.deleteEventCalls.push(id);
+
+  return dbState.deleteEventResult;
 }

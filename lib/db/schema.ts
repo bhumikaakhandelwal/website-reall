@@ -138,6 +138,17 @@ export const eventRowSchema = z.object({
       (value) => !Number.isNaN(Date.parse(value)),
       'created_at must be a parseable timestamp'
     ),
+  // Phase 8A: NULL means the event is active. This is the whole archive state -
+  // there is deliberately no separate status column that could disagree with it.
+  archived_at: z
+    .string()
+    .refine(
+      (value) => !Number.isNaN(Date.parse(value)),
+      'archived_at must be a parseable timestamp'
+    )
+    .nullable(),
+  // The manager who archived it, or null if that member row was removed.
+  archived_by: z.string().uuid().nullable(),
 });
 
 // Phase 7B: one row of `attendance`. Snake_case because it mirrors the table's

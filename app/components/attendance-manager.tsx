@@ -31,6 +31,7 @@ import {
   type AttendancePayload,
 } from "@/lib/events/attendance";
 import { eventTypeLabel, formatEventDate } from "@/lib/events/events";
+import { isEditable } from "@/lib/events/lifecycle";
 
 type LoadState =
   | { status: "loading" }
@@ -138,10 +139,11 @@ export function AttendanceManager({ eventId }: { eventId: string }) {
   );
 
   function toggle(memberId: string) {
-    // An awarded member cannot be un-recorded: the XP has been given and the
-    // ledger points at the attendance row. The route enforces this too; the
-    // disabled checkbox is just the honest interface for it.
-    if (awarded.has(memberId)) return;
+    // An archived event is read-only, and an awarded member cannot be
+    // un-recorded: the XP has been given and the ledger points at the
+    // attendance row. The routes enforce both; the disabled checkbox is just
+    // the honest interface for them.
+    if (!editable || awarded.has(memberId)) return;
 
     setSelected((current) => {
       const next = new Set(current);
@@ -159,6 +161,8 @@ export function AttendanceManager({ eventId }: { eventId: string }) {
   }
 
   function selectAllFiltered() {
+    if (!editable) return;
+
     setSelected((current) => {
       const next = new Set(current);
 
@@ -173,6 +177,8 @@ export function AttendanceManager({ eventId }: { eventId: string }) {
   }
 
   function clearFiltered() {
+    if (!editable) return;
+
     setSelected((current) => {
       const next = new Set(current);
 
@@ -302,9 +308,17 @@ export function AttendanceManager({ eventId }: { eventId: string }) {
     );
   }
 
-  const canSave = action.status !== "busy";
+  // Phase 8A: an archived event is read-only. The list is still shown - the
+  // record of who attended is exactly what archiving preserves - but nothing
+  // can be changed.
+  const editable = payload ? isEditable(payload.event) : false;
+
+  const canSave = action.status !== "busy" && editable;
   const canAward =
-    action.status !== "busy" && Boolean(payload?.awardable) && stats.awaiting > 0;
+    action.status !== "busy" &&
+    editable &&
+    Boolean(payload?.awardable) &&
+    stats.awaiting > 0;
 
   return (
     <>
@@ -353,6 +367,13 @@ export function AttendanceManager({ eventId }: { eventId: string }) {
             aria-hidden="true"
             className="mt-6 block h-6 w-64 animate-pulse rounded-full bg-muted"
           />
+        )}
+
+        {payload && !editable && (
+          <p className="mt-4 max-w-2xl rounded-panel border border-border bg-surface px-5 py-4 text-sm leading-6 text-muted">
+            This event is archived, so its attendance is read-only. The record of
+            who attended and what they were awarded is kept exactly as it is.
+          </p>
         )}
 
         {payload && !payload.awardable && (
@@ -451,13 +472,15 @@ export function AttendanceManager({ eventId }: { eventId: string }) {
                 <li key={member.memberId} className="border-t border-border">
                   <label
                     className={`flex items-center gap-4 px-5 py-4 transition-colors sm:px-7 ${
-                      isAwarded ? "cursor-default" : "cursor-pointer hover:bg-accent/5"
+                      isAwarded || !editable
+                        ? "cursor-default"
+                        : "cursor-pointer hover:bg-accent/5"
                     }`}
                   >
                     <input
                       type="checkbox"
                       checked={isChecked}
-                      disabled={isAwarded}
+                      disabled={isAwarded || !editable}
                       onChange={() => toggle(member.memberId)}
                       className="h-4 w-4 shrink-0 accent-accent"
                     />

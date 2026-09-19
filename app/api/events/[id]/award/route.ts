@@ -60,6 +60,18 @@ export async function POST(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
+    // Phase 8A: an archived event is read-only, so no further XP can be awarded
+    // against it. Checked here rather than inside award_event_attendance, which
+    // would mean duplicating that function's body in a new migration to add one
+    // condition - and this route is the only caller of a function granted to
+    // service_role alone.
+    //
+    // XP already awarded is untouched: archiving an event never reverses it, and
+    // reversing an entry is a correction (a new negative row), not a deletion.
+    if (event.archivedAt !== null) {
+      return NextResponse.json({ error: 'Event is archived' }, { status: 409 });
+    }
+
     const activity = getXpActivity(event.activityCode);
 
     // An event whose activity has left the Handbook has no amount to award.
