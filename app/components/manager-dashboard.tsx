@@ -83,6 +83,12 @@ const QUICK_ACTIONS = [
     href: "/manager/analytics",
     hint: "How much the club has run, and who turned up",
   },
+  {
+    // Phase 8C, same reasoning.
+    label: "XP Ledger",
+    href: "/manager/ledger",
+    hint: "Every entry in the audit trail, filterable",
+  },
 ];
 
 const SKELETON_ROWS = [0, 1, 2, 3, 4];

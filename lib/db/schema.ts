@@ -184,3 +184,39 @@ export const eventAttendanceTotalRowSchema = z.object({
   // 0 rather than NULL - a real and temporary state, not an error.
   xp_awarded: z.number().int().min(0),
 });
+
+// Phase 8C: one full row of `xp_ledger`, for the manager-only ledger explorer.
+//
+// Distinct from `recentXpEntryRowSchema` (Phase 5C), which mirrors the
+// get_recent_xp_entries FUNCTION and therefore carries the member's display
+// name and is capped by a limit. This mirrors the TABLE itself: every row, no
+// name, no cap. The name is joined in application code from the roster the
+// directory already reads, so the explorer and the directory cannot disagree
+// about what a member is called.
+export const xpLedgerFullRowSchema = z.object({
+  id: z.number().int(),
+  user_id: z.string().uuid(),
+  // Signed: negative for a corrective entry. Never zero (the column has a CHECK
+  // constraint), which is why the explorer can render the sign from the sign
+  // alone.
+  xp_amount: z.number().int().refine((value) => value !== 0, 'XP amount must not be zero'),
+  // Nullable in the ledger, and null is exactly what marks an entry as a
+  // correction rather than an award - the explorer's Award/Correction filter is
+  // this column and nothing else.
+  activity_code: z.string().nullable(),
+  reason: z.string().nullable(),
+  created_at: z
+    .string()
+    .refine(
+      (value) => !Number.isNaN(Date.parse(value)),
+      'created_at must be a parseable timestamp'
+    ),
+});
+
+// Phase 8C: the link from a ledger entry back to the event it was awarded
+// through, read from `attendance`. Only rows that have actually been awarded
+// appear, because an unawarded attendance row points at no ledger entry.
+export const xpLedgerEventLinkRowSchema = z.object({
+  xp_ledger_id: z.number().int(),
+  event_id: z.string().uuid(),
+});

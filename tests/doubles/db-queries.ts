@@ -110,6 +110,19 @@ export type DoubledAttendanceTotal = {
   xpAwarded: number;
 };
 
+/**
+ * Mirrors `XpLedgerFullRow` from `@/lib/db/queries` - one full ledger row, with
+ * no member name and no event, which the route joins in application code.
+ */
+export type DoubledLedgerRow = {
+  entryId: number;
+  memberId: string;
+  xpAmount: number;
+  activityCode: string | null;
+  reason: string | null;
+  createdAt: string;
+};
+
 export const dbState = {
   /** The member the session resolves to, or null when there is none. */
   profile: null as DoubledProfile | null,
@@ -243,6 +256,21 @@ export const dbState = {
   attendanceTotalsCalls: 0,
   /** When true, the attendance-totals read simulates a database failure. */
   attendanceTotalsFail: false,
+  /**
+   * Phase 8C: every ledger row the explorer read should return, in the order
+   * the database would have ordered them - newest first.
+   */
+  ledgerEntries: [] as DoubledLedgerRow[],
+  /** Every ledger read the route performed. */
+  ledgerEntriesCalls: 0,
+  /** When true, the ledger read simulates a database failure. */
+  ledgerEntriesFail: false,
+  /** The ledger-to-event links the explorer read should return. */
+  ledgerLinks: [] as { xpLedgerId: number; eventId: string }[],
+  /** Every link read the route performed. */
+  ledgerLinksCalls: 0,
+  /** When true, the link read simulates a database failure. */
+  ledgerLinksFail: false,
 };
 
 export function resetDbState() {
@@ -287,6 +315,12 @@ export function resetDbState() {
   dbState.attendanceTotals = [];
   dbState.attendanceTotalsCalls = 0;
   dbState.attendanceTotalsFail = false;
+  dbState.ledgerEntries = [];
+  dbState.ledgerEntriesCalls = 0;
+  dbState.ledgerEntriesFail = false;
+  dbState.ledgerLinks = [];
+  dbState.ledgerLinksCalls = 0;
+  dbState.ledgerLinksFail = false;
 }
 
 export async function getMemberProfile(memberId: string) {
@@ -440,4 +474,22 @@ export async function getEventAttendanceTotals(): Promise<
   if (dbState.attendanceTotalsFail) return null;
 
   return dbState.attendanceTotals;
+}
+
+export async function getXpLedgerEntries(): Promise<DoubledLedgerRow[] | null> {
+  dbState.ledgerEntriesCalls += 1;
+
+  if (dbState.ledgerEntriesFail) return null;
+
+  return dbState.ledgerEntries;
+}
+
+export async function getXpLedgerEventLinks(): Promise<
+  { xpLedgerId: number; eventId: string }[] | null
+> {
+  dbState.ledgerLinksCalls += 1;
+
+  if (dbState.ledgerLinksFail) return null;
+
+  return dbState.ledgerLinks;
 }
