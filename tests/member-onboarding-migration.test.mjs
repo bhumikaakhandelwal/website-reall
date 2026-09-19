@@ -30,11 +30,25 @@ import {
   validateRoster,
 } from '../lib/onboarding/roster.ts';
 import { XP_ACTIVITIES } from '../lib/xp/activities.ts';
+import { readdirSync } from 'node:fs';
 
-const MIGRATION_URL = new URL(
-  '../supabase/migrations/20260918000001_member_onboarding.sql',
-  import.meta.url
+// Resolved by suffix rather than by exact filename. The version prefix is a
+// migration-ordering concern, not a content one: this file was renamed from
+// 20260918000001 to 20260918000003 to resolve a duplicate-version collision
+// with manager_dashboard, and a test that hardcoded the old name broke for a
+// reason that had nothing to do with what it was checking.
+const MIGRATIONS_DIR = new URL('../supabase/migrations/', import.meta.url);
+
+const MIGRATION_FILE = readdirSync(MIGRATIONS_DIR).find((name) =>
+  name.endsWith('_member_onboarding.sql')
 );
+
+assert.ok(
+  MIGRATION_FILE,
+  'a *_member_onboarding.sql migration must exist in supabase/migrations/'
+);
+
+const MIGRATION_URL = new URL(MIGRATION_FILE, MIGRATIONS_DIR);
 
 const sql = readFileSync(MIGRATION_URL, 'utf8');
 

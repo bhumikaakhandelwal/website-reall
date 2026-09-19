@@ -8,6 +8,7 @@ import {
   memberDirectoryRowSchema,
   recentXpEntryRowSchema,
   eventRowSchema,
+  attendanceRowSchema,
 } from './schema';
 import type { LevelDefinition } from '@/lib/xp/levels';
 import type { LeaderboardRow } from '@/lib/xp/leaderboards';
@@ -58,6 +59,21 @@ export type EventRow = {
   /** The manager who created it, or null if their member row was removed. */
   createdBy: string | null;
   createdAt: string;
+};
+
+/**
+ * Phase 7B: one row of `attendance`, as read from the database - the camelCase
+ * shape `getEventAttendance` maps the table's snake_case columns onto.
+ *
+ * `xpLedgerId` is null for an attendee who has not been awarded yet, which is
+ * the distinction the whole award is built on.
+ */
+export type AttendanceRow = {
+  id: string;
+  eventId: string;
+  memberId: string;
+  recordedAt: string;
+  xpLedgerId: number | null;
 };
 
 export async function getMemberById(id: string) {
@@ -530,4 +546,187 @@ export async function createEvent(entry: EventWrite): Promise<EventWriteResult> 
   }
 
   return { ok: true, id };
+}
+
+// Phase 7B: one event by id, for the attendance page.
+//
+// SERVER-ONLY, like every other read and write here: `events` has RLS enabled
+// with no policy, so the service-role client is the only way in, and the only
+// caller is the session- and manager-checked attendance route.
+//
+// Returns null both when the event does not exist AND when the read failed, so
+// the route answers 404 for an unknown id and 500 for a failure. The two are
+// told apart by the route's own existence check rather than here - see
+// app/api/events/[id]/attendance/route.ts, which treats null as "not found"
+// only after a successful list read has ruled out a failure.
+export async function getEventById(id: string): Promise<EventRow | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('events')
+    .select('id, title, event_type, event_date, activity_code, created_by, created_at')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  const parsed = eventRowSchema.safeParse(data);
+
+  if (!parsed.success) return null;
+
+  return {
+    id: parsed.data.id,
+    title: parsed.data.title,
+    eventType: parsed.data.event_type,
+    eventDate: parsed.data.event_date,
+    activityCode: parsed.data.activity_code,
+    createdBy: parsed.data.created_by,
+    createdAt: parsed.data.created_at,
+  };
+}
+
+// Phase 7B: every attendance row for one event.
+//
+// The whole set is read at once rather than per member: an event has a few
+// dozen attendees and the page needs all of them to render the checkbox list.
+//
+// Ordered by member id so the result is stable between two identical requests -
+// the page re-sorts for display, but nothing downstream should have to cope with
+// a reshuffling array.
+//
+// Returns null on failure, including when a row does not match the declared
+// shape, so the route can answer 500 rather than render an event as empty.
+export async function getEventAttendance(
+  eventId: string
+): Promise<AttendanceRow[] | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('attendance')
+    .select('id, event_id, member_id, recorded_at, xp_ledger_id')
+    .eq('event_id', eventId)
+    .order('member_id', { ascending: true });
+
+  if (error || !data) return null;
+
+  if (!Array.isArray(data)) return null;
+
+  const rows: AttendanceRow[] = [];
+
+  for (const row of data as unknown[]) {
+    const parsed = attendanceRowSchema.safeParse(row);
+
+    if (!parsed.success) return null;
+
+    rows.push({
+      id: parsed.data.id,
+      eventId: parsed.data.event_id,
+      memberId: parsed.data.member_id,
+      recordedAt: parsed.data.recorded_at,
+      xpLedgerId: parsed.data.xp_ledger_id,
+    });
+  }
+
+  return rows;
+}
+
+export type SetAttendanceResult =
+  | { ok: true; added: number; removed: number; keptAwarded: number }
+  | { ok: false };
+
+// Phase 7B: save one event's attendance.
+//
+// One RPC rather than a sequence of client calls, because the operation is an
+// insert of the newly-checked members AND a delete of the unchecked ones. Split
+// across two round trips a failure between them would leave the event
+// half-saved; inside the function they commit together.
+//
+// The duplicate protection is the database's: the function inserts with
+// ON CONFLICT DO NOTHING against the UNIQUE (event_id, member_id) constraint
+// Phase 7A added, so saving the same set twice adds nothing. It also refuses to
+// delete a row that has been awarded - see the migration.
+//
+// Authorization is the caller's responsibility: the function is granted to
+// service_role alone, so every caller MUST have verified the signed session and
+// confirmed the actor is an XP manager (lib/xp/managers.ts).
+export async function setEventAttendance(
+  eventId: string,
+  memberIds: readonly string[]
+): Promise<SetAttendanceResult> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase.rpc('set_event_attendance', {
+    p_event_id: eventId,
+    p_member_ids: [...memberIds],
+  });
+
+  if (error || !data) return { ok: false };
+
+  // The function RETURNS TABLE (...), so PostgREST answers with a bare array of
+  // row objects and supabase-js resolves that array directly as `data` - there
+  // is no wrapper object, and the function always returns exactly one row.
+  if (!Array.isArray(data) || data.length !== 1) return { ok: false };
+
+  const row = data[0] as Record<string, unknown>;
+
+  const counts = [row.added, row.removed, row.kept_awarded];
+
+  if (counts.some((value) => typeof value !== 'number' || !Number.isInteger(value))) {
+    return { ok: false };
+  }
+
+  return {
+    ok: true,
+    added: row.added as number,
+    removed: row.removed as number,
+    keptAwarded: row.kept_awarded as number,
+  };
+}
+
+export type AwardAttendanceResult =
+  | { ok: true; awarded: number }
+  | { ok: false };
+
+// Phase 7B: award every unawarded attendee of one event, once each.
+//
+// Idempotent by construction - the function awards only rows whose
+// attendance.xp_ledger_id IS NULL, and links each new ledger entry in the same
+// transaction - so a second call awards nobody. It also row-locks the
+// unawarded rows, so two managers awarding at the same moment cannot
+// double-award. See the migration for both.
+//
+// `xpAmount` is resolved by the caller from the EVENT's activity code via
+// lib/xp/activities.ts, which stays the single source of truth for the
+// Handbook. The activity code and the reason are NOT passed in: the function
+// reads them from the event row, so a client cannot invent either.
+//
+// Authorization is the caller's responsibility, exactly as for
+// setEventAttendance: this function writes to xp_ledger, the audit trail, and
+// is granted to service_role alone.
+export async function awardEventAttendance(
+  eventId: string,
+  xpAmount: number
+): Promise<AwardAttendanceResult> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase.rpc('award_event_attendance', {
+    p_event_id: eventId,
+    p_xp_amount: xpAmount,
+  });
+
+  if (error || !data) return { ok: false };
+
+  // A set-returning function answers with a bare array. An empty array is the
+  // correct answer for "everything was already awarded", not a failure.
+  if (!Array.isArray(data)) return { ok: false };
+
+  for (const row of data as unknown[]) {
+    const candidate = row as Record<string, unknown>;
+
+    if (typeof candidate.member_id !== 'string' || typeof candidate.ledger_id !== 'number') {
+      return { ok: false };
+    }
+  }
+
+  return { ok: true, awarded: data.length };
 }

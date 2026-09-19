@@ -39,10 +39,20 @@ export const adminState = {
     error: { message: string } | null;
   },
 
-  /** Every select chain, recording the table, columns and orderings asked for. */
+  /**
+   * Phase 7B: what a `.select(...).eq(...).maybeSingle()` should resolve to -
+   * one row object, or null, rather than an array.
+   */
+  singleResult: { data: null, error: null } as {
+    data: unknown;
+    error: { message: string } | null;
+  },
+
+  /** Every select chain, recording the table, columns, filters and orderings. */
   selectCalls: [] as {
     table: string;
     columns: string;
+    eqs: { column: string; value: unknown }[];
     orders: { column: string; ascending: boolean }[];
   }[],
 };
@@ -53,21 +63,23 @@ export function resetAdminState() {
   adminState.inserts = [];
   adminState.insertResult = { error: null };
   adminState.selectResult = { data: null, error: null };
+  adminState.singleResult = { data: null, error: null };
   adminState.selectCalls = [];
 }
 
 /**
  * A thenable `.select()` chain.
  *
- * `await`ing the builder resolves `selectResult`, and every `.order()` is
- * recorded rather than applied - the point is to assert on what the query layer
- * ASKED the database for (ordering is the database's job everywhere in this
- * project), not to reimplement PostgREST.
+ * `await`ing the builder resolves `selectResult`, and every `.order()` and
+ * `.eq()` is recorded rather than applied - the point is to assert on what the
+ * query layer ASKED the database for (filtering and ordering are the database's
+ * job everywhere in this project), not to reimplement PostgREST.
  */
 function selectChain(table: string, columns: string) {
   const call = {
     table,
     columns,
+    eqs: [] as { column: string; value: unknown }[],
     orders: [] as { column: string; ascending: boolean }[],
   };
 
@@ -77,6 +89,13 @@ function selectChain(table: string, columns: string) {
     order(column: string, options?: { ascending?: boolean }) {
       call.orders.push({ column, ascending: options?.ascending ?? true });
       return chain;
+    },
+    eq(column: string, value: unknown) {
+      call.eqs.push({ column, value });
+      return chain;
+    },
+    maybeSingle() {
+      return Promise.resolve(adminState.singleResult);
     },
     then(
       resolve: (value: unknown) => unknown,
