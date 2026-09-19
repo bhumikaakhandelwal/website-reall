@@ -74,6 +74,15 @@ const QUICK_ACTIONS = [
     href: "/xp-system",
     hint: "The Handbook's levels and activities",
   },
+  {
+    // Phase 8B. Added here rather than to the global navigation, which is
+    // Bhumika's and frozen: the manager dashboard is the one place a manager
+    // already lands, so it is where a new manager tool should be reachable
+    // from.
+    label: "Event Analytics",
+    href: "/manager/analytics",
+    hint: "How much the club has run, and who turned up",
+  },
 ];
 
 const SKELETON_ROWS = [0, 1, 2, 3, 4];
@@ -299,7 +308,7 @@ export function ManagerDashboard() {
           </h2>
         </div>
 
-        <div className="mt-8 grid gap-4 sm:grid-cols-3">
+        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {QUICK_ACTIONS.map((action) => (
             <Link
               key={action.href}

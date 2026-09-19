@@ -168,3 +168,19 @@ export const attendanceRowSchema = z.object({
   // without it is a row waiting to be awarded, not a malformed row.
   xp_ledger_id: z.number().int().nullable(),
 });
+
+// Phase 8B: one event's attendance totals, as returned by the
+// get_event_attendance_totals function. Snake_case because it mirrors the
+// function's output columns; lib/db/queries.ts maps it to the camelCase shape
+// the API returns.
+export const eventAttendanceTotalRowSchema = z.object({
+  event_id: z.string().uuid(),
+  // Always at least 1: the function inner-joins from attendance, so an event
+  // nobody attended simply does not appear. The caller treats an absent row as
+  // zero, which is why this can be a positive integer rather than a count that
+  // might be 0.
+  attendance_count: z.number().int().positive(),
+  // COALESCEd in SQL, so attendance that has not been awarded yet is a genuine
+  // 0 rather than NULL - a real and temporary state, not an error.
+  xp_awarded: z.number().int().min(0),
+});
