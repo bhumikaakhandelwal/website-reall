@@ -18,16 +18,18 @@
 
 import { NextResponse } from 'next/server';
 import { getMonthlyLeaderboard } from '@/lib/db/queries';
-import { getSessionMemberId } from '@/lib/auth/session';
+import { requireMember } from '@/lib/auth/require-manager';
 import { LEADERBOARDS, assignRanks, utcMonthPeriod } from '@/lib/xp/leaderboards';
 
 export async function GET() {
   try {
-    const memberId = await getSessionMemberId();
+    // Phase 8D: the shared member gate. The leaderboard is readable by any
+    // signed-in member, so this is requireMember rather than requireXpManager -
+    // but a deactivated member is refused, which the old cookie-only session
+    // could not express.
+    const auth = await requireMember();
 
-    if (!memberId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    if (!auth.ok) return auth.response;
 
     // The current leaderboard month, as [start, end). Both bounds are computed
     // once, in UTC, and handed to the database as an explicit range.

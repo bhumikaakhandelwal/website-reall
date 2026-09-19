@@ -3,6 +3,13 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "motion/react";
+import {
+  checkEmail,
+  requestActivation,
+  type ActivationStatus,
+} from "@/lib/auth/activation";
+import { markGateClosed, markGateOpen } from "@/lib/auth/gate";
+import { requestPasswordReset } from "@/lib/profile/security";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -11,9 +18,24 @@ export default function LoginPage() {
 
   const [typedGreeting, setTypedGreeting] = useState("");
   const [email, setEmail] = useState("");
+  // Phase 8D: the password. Supabase Auth owns the credential now, so the form
+  // has to collect one - it never did before this phase.
+  const [password, setPassword] = useState("");
   const [loginStatus, setLoginStatus] = useState<
     "idle" | "checking" | "granted" | "denied"
   >("idle");
+
+  /*
+   * Phase 8D: what the address typed into the form turned out to be.
+   *
+   * Only 'needs-activation' changes the page - it is the one state where the
+   * member should be offered something other than "try again". The other three
+   * leave the existing denied panel exactly as it was.
+   */
+  const [activationStatus, setActivationStatus] =
+    useState<ActivationStatus | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   /* ================= TYPEWRITER ================= */
 
@@ -40,31 +62,69 @@ export default function LoginPage() {
     const enteredEmail = email.trim().toLowerCase();
 
     setLoginStatus("checking");
+    setNotice(null);
+    setActivationStatus(null);
 
     /*
-     * Backend check against the approved members list.
-     * The 1000ms minimum keeps the existing "scanning" state visible.
+     * Supabase Auth checks the password now, so the email is no longer the
+     * whole credential. The 1000ms minimum keeps the existing "scanning" state
+     * visible.
      */
     const [response] = await Promise.all([
       fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: enteredEmail }),
+        body: JSON.stringify({ email: enteredEmail, password }),
       }).catch(() => null),
       new Promise((resolve) => setTimeout(resolve, 1000)),
     ]);
 
     if (response?.ok) {
-      localStorage.setItem("dbce-logged-in", "true");
+      markGateOpen();
       setLoginStatus("granted");
 
       setTimeout(() => {
         router.replace("/");
       }, 1800);
-    } else {
-      localStorage.removeItem("dbce-logged-in");
-      setLoginStatus("denied");
+
+      return;
     }
+
+    markGateClosed();
+    setLoginStatus("denied");
+
+    /*
+     * Phase 8D: find out WHY it failed.
+     *
+     * A member who has never activated gets offered "create your password"
+     * instead of only "try again" - which is the whole first-time flow, and the
+     * reason the 42 existing members can join without anyone emailing them.
+     */
+    const check = await checkEmail(enteredEmail);
+
+    if (check.ok) setActivationStatus(check.status);
+  };
+
+  /** Sends the setup email for a member who has never activated. */
+  const handleActivate = async () => {
+    setBusy(true);
+    setNotice(null);
+
+    const outcome = await requestActivation(email);
+
+    setBusy(false);
+    setNotice(outcome.ok ? outcome.message : outcome.message);
+  };
+
+  /** Sends a reset link for a member who has an account and forgot the password. */
+  const handleForgot = async () => {
+    setBusy(true);
+    setNotice(null);
+
+    const outcome = await requestPasswordReset(email);
+
+    setBusy(false);
+    setNotice(outcome.ok ? outcome.message : outcome.message);
   };
 
   return (
@@ -324,19 +384,87 @@ export default function LoginPage() {
                     ACCESS DENIED
                   </p>
 
+                  {/*
+                    Phase 8D: the denied panel now says WHICH kind of denied it
+                    is. Before this phase there was only one reason to be
+                    refused; now a member can be unknown, deactivated, or simply
+                    have the wrong password - and each needs a different next
+                    step.
+                  */}
+
                   <p className="mt-4 font-mono text-xs leading-6 tracking-[0.08em] text-muted-foreground">
-                    EMAIL NOT FOUND IN DATABASE.
-                    <br />
-                    PLEASE USE YOUR REGISTERED STUDENT EMAIL.
+                    {activationStatus === "needs-activation" ? (
+                      <>
+                        FIRST TIME HERE? WE FOUND YOUR CLUB MEMBERSHIP.
+                        <br />
+                        CREATE YOUR PASSWORD.
+                      </>
+                    ) : activationStatus === "deactivated" ? (
+                      <>
+                        YOUR CLUB MEMBERSHIP IS INACTIVE.
+                        <br />
+                        ASK A MANAGER TO REACTIVATE YOU.
+                      </>
+                    ) : activationStatus === "has-account" ? (
+                      <>
+                        PASSWORD NOT RECOGNISED.
+                        <br />
+                        RESET IT, OR TRY AGAIN.
+                      </>
+                    ) : (
+                      <>
+                        EMAIL NOT FOUND IN DATABASE.
+                        <br />
+                        PLEASE USE YOUR REGISTERED STUDENT EMAIL.
+                      </>
+                    )}
                   </p>
 
-                  <button
-                    type="button"
-                    onClick={() => setLoginStatus("idle")}
-                    className="mt-7 border border-border px-5 py-3 font-mono text-xs tracking-[0.12em] transition-colors hover:border-accent hover:text-accent"
-                  >
-                    TRY AGAIN →
-                  </button>
+                  <div className="mt-7 flex flex-wrap gap-3">
+
+                    {activationStatus === "needs-activation" && (
+                      <button
+                        type="button"
+                        onClick={handleActivate}
+                        disabled={busy}
+                        className="border border-border px-5 py-3 font-mono text-xs tracking-[0.12em] transition-colors hover:border-accent hover:text-accent disabled:opacity-40"
+                      >
+                        {busy ? "SENDING..." : "EMAIL ME A SETUP LINK →"}
+                      </button>
+                    )}
+
+                    {activationStatus === "has-account" && (
+                      <button
+                        type="button"
+                        onClick={handleForgot}
+                        disabled={busy}
+                        className="border border-border px-5 py-3 font-mono text-xs tracking-[0.12em] transition-colors hover:border-accent hover:text-accent disabled:opacity-40"
+                      >
+                        {busy ? "SENDING..." : "EMAIL ME A RESET LINK →"}
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLoginStatus("idle");
+                        setNotice(null);
+                      }}
+                      className="border border-border px-5 py-3 font-mono text-xs tracking-[0.12em] transition-colors hover:border-accent hover:text-accent"
+                    >
+                      TRY AGAIN →
+                    </button>
+
+                  </div>
+
+                  {notice && (
+                    <p
+                      role="status"
+                      className="mt-5 border border-border bg-background p-4 font-mono text-[11px] leading-5 tracking-[0.06em] text-muted-foreground"
+                    >
+                      {notice}
+                    </p>
+                  )}
 
                 </motion.div>
 
@@ -376,6 +504,73 @@ export default function LoginPage() {
                     />
 
                   </div>
+
+                  {/*
+                    Phase 8D: the password field. Same styling as the email
+                    input above so the page reads as one form, not two.
+                  */}
+
+                  <div>
+
+                    <label
+                      htmlFor="password"
+                      className="mb-3 block font-mono text-xs font-bold tracking-[0.2em] text-foreground"
+                    >
+                      PASSWORD
+                    </label>
+
+                    <input
+                      id="password"
+                      type="password"
+                      required
+                      autoComplete="current-password"
+                      value={password}
+                      disabled={loginStatus === "checking"}
+                      onChange={(e) =>
+                        setPassword(e.target.value)
+                      }
+                      placeholder="••••••••"
+                      className="h-16 w-full border-b border-border bg-transparent px-0 font-mono text-lg outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-accent disabled:opacity-50"
+                    />
+
+                  </div>
+
+                  {/*
+                    Phase 8D: the two ways out of a failed sign-in that are not
+                    "try the same thing again" - set a password for the first
+                    time, or reset a forgotten one.
+                  */}
+
+                  <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+
+                    <button
+                      type="button"
+                      onClick={handleForgot}
+                      disabled={busy || email.trim().length === 0}
+                      className="font-mono text-[10px] tracking-[0.15em] text-muted-foreground transition-colors hover:text-accent disabled:opacity-40"
+                    >
+                      FORGOT PASSWORD?
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleActivate}
+                      disabled={busy || email.trim().length === 0}
+                      className="font-mono text-[10px] tracking-[0.15em] text-muted-foreground transition-colors hover:text-accent disabled:opacity-40"
+                    >
+                      FIRST TIME HERE? CREATE YOUR PASSWORD
+                    </button>
+
+                  </div>
+
+                  {notice && (
+                    <p
+                      role="status"
+                      className="border border-border bg-muted/30 p-4 font-mono text-[11px] leading-5 tracking-[0.06em] text-muted-foreground"
+                    >
+                      {notice}
+                    </p>
+                  )}
 
 
                   <motion.button

@@ -26,12 +26,11 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import {
   createXpLedgerEntry,
-  getMemberProfile,
+  getMemberArchiveState,
   type XpLedgerWrite,
 } from '@/lib/db/queries';
-import { getSessionMemberId } from '@/lib/auth/session';
+import { requireXpManager } from '@/lib/auth/require-manager';
 import { getXpActivity } from '@/lib/xp/activities';
-import { isXpManager } from '@/lib/xp/managers';
 
 const awardSchema = z.strictObject({
   memberId: z.string().uuid(),
@@ -55,24 +54,11 @@ const requestSchema = z.union([awardSchema, correctionSchema]);
 
 export async function POST(request: Request) {
   try {
-    const actorId = await getSessionMemberId();
+    // Phase 8D: the shared gate, replacing this route's inlined copy of the
+    // session and allowlist checks.
+    const auth = await requireXpManager();
 
-    if (!actorId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const actor = await getMemberProfile(actorId);
-
-    if (!actor || !actor.success) {
-      // The cookie is signed and unexpired but no longer maps to a member.
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Authorization. The email comes from the member record resolved from the
-    // session, so it cannot be spoofed by the caller.
-    if (!isXpManager(actor.data.email)) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    if (!auth.ok) return auth.response;
 
     const body = await request.json().catch(() => null);
     const parsed = requestSchema.safeParse(body);
@@ -109,6 +95,18 @@ export async function POST(request: Request) {
         activityCode: null,
         reason: parsed.data.reason,
       };
+    }
+
+    // Phase 8E: an archived member cannot receive new XP.
+    //
+    // Checked BEFORE the ledger is touched, so a refusal writes nothing and
+    // nothing has to be undone - the ledger stays append-only, and a rejected
+    // attempt leaves no trace to correct. Historical entries are untouched:
+    // archiving never removed them, so there is nothing here to reconcile.
+    const archiveState = await getMemberArchiveState(entry.memberId);
+
+    if (archiveState && archiveState.archivedAt !== null) {
+      return NextResponse.json({ error: 'Member is archived' }, { status: 409 });
     }
 
     const result = await createXpLedgerEntry(entry);

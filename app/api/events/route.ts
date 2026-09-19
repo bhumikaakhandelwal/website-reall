@@ -31,48 +31,19 @@
 // lib/xp/activities.ts at award time, so a client can never choose a value.
 
 import { NextResponse } from 'next/server';
-import { createEvent, getEvents, getMemberProfile } from '@/lib/db/queries';
-import { getSessionMemberId } from '@/lib/auth/session';
-import { isXpManager } from '@/lib/xp/managers';
+import { createEvent, getEvents } from '@/lib/db/queries';
+import { requireXpManager } from '@/lib/auth/require-manager';
 import { getXpActivity } from '@/lib/xp/activities';
 import { eventBodySchema } from '@/lib/events/request';
 
-/** Resolves the session's manager email, or the response to return instead. */
-async function authorize(): Promise<
-  { ok: true; memberId: string } | { ok: false; response: NextResponse }
-> {
-  const actorId = await getSessionMemberId();
-
-  if (!actorId) {
-    return {
-      ok: false,
-      response: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
-    };
-  }
-
-  const actor = await getMemberProfile(actorId);
-
-  if (!actor || !actor.success) {
-    // The cookie is signed and unexpired but no longer maps to a member.
-    return {
-      ok: false,
-      response: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
-    };
-  }
-
-  if (!isXpManager(actor.data.email)) {
-    return {
-      ok: false,
-      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
-    };
-  }
-
-  return { ok: true, memberId: actor.data.id };
-}
+// Phase 8D: this route used to carry its own `authorize()` - a copy of the
+// session and allowlist checks against the Phase 1C cookie. Replacing that
+// session meant touching every one of these anyway, so the copy is gone and the
+// shared gate in lib/auth/require-manager.ts is used directly.
 
 export async function GET() {
   try {
-    const auth = await authorize();
+    const auth = await requireXpManager();
 
     if (!auth.ok) return auth.response;
 
@@ -100,7 +71,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const auth = await authorize();
+    const auth = await requireXpManager();
 
     if (!auth.ok) return auth.response;
 

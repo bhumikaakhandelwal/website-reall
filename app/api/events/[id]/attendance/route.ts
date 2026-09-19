@@ -26,7 +26,8 @@ import { z } from 'zod';
 import {
   getEventAttendance,
   getEventById,
-  getMemberDirectory,
+  getActiveMembers,
+  getMemberArchiveState,
   setEventAttendance,
 } from '@/lib/db/queries';
 import { requireXpManager } from '@/lib/auth/require-manager';
@@ -68,7 +69,7 @@ export async function GET(
 
     const [event, members, attendance] = await Promise.all([
       getEventById(eventId),
-      getMemberDirectory(),
+      getActiveMembers(),
       getEventAttendance(eventId),
     ]);
 
@@ -160,6 +161,20 @@ export async function PUT(
     // deliberately unaffected - they just cannot be changed.
     if (event.archivedAt !== null) {
       return NextResponse.json({ error: 'Event is archived' }, { status: 409 });
+    }
+
+    // Phase 8E: an archived member cannot be newly marked present.
+    //
+    // Refused before the write, so a checklist containing an archived member
+    // changes nothing rather than silently recording them. The GET above is
+    // deliberately unaffected: attendance that was ALREADY recorded stays
+    // readable, and the member's history is preserved.
+    const archiveStates = await Promise.all(
+      parsed.data.memberIds.map((memberId) => getMemberArchiveState(memberId))
+    );
+
+    if (archiveStates.some((state) => state !== null && state.archivedAt !== null)) {
+      return NextResponse.json({ error: 'Member is archived' }, { status: 409 });
     }
 
     const result = await setEventAttendance(eventId, parsed.data.memberIds);

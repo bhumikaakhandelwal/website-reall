@@ -89,6 +89,19 @@ const QUICK_ACTIONS = [
     href: "/manager/ledger",
     hint: "Every entry in the audit trail, filterable",
   },
+  {
+    // Phase 8E.
+    label: "Member Lifecycle",
+    href: "/manager/members",
+    hint: "Archive and restore members without losing history",
+  },
+  {
+    // The register itself. Added alongside the others so every manager tool is
+    // reachable from the one page a manager already lands on.
+    label: "Events",
+    href: "/events",
+    hint: "The event register, with attendance and awards",
+  },
 ];
 
 const SKELETON_ROWS = [0, 1, 2, 3, 4];

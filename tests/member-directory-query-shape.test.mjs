@@ -31,6 +31,7 @@ const ROW = {
   membership_status: 'active',
   created_at: '2026-07-01T00:00:00+00:00',
   total_xp: 750,
+  archived_at: null,
 };
 
 test('maps a bare rows array to camelCase entries', async () => {
@@ -47,6 +48,9 @@ test('maps a bare rows array to camelCase entries', async () => {
       membershipStatus: 'active',
       joinedAt: '2026-07-01T00:00:00+00:00',
       totalXp: 750,
+      // Phase 8E: the directory carries archive state, so the active and
+      // archived lists can both come from this one read.
+      archivedAt: null,
     },
   ]);
 
@@ -91,6 +95,7 @@ test('a member with no ledger rows is a genuine zero, not a dropped row', async 
       membershipStatus: 'active',
       joinedAt: '2026-07-01T00:00:00+00:00',
       totalXp: 0,
+      archivedAt: null,
     },
   ]);
 });

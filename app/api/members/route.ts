@@ -26,33 +26,21 @@
 // makes that acceptable.
 
 import { NextResponse } from 'next/server';
-import { getMemberDirectory, getMemberProfile, getAllLevels } from '@/lib/db/queries';
-import { getSessionMemberId } from '@/lib/auth/session';
-import { isXpManager } from '@/lib/xp/managers';
+import { getActiveMembers, getAllLevels } from '@/lib/db/queries';
+import { requireXpManager } from '@/lib/auth/require-manager';
 import { resolveLevel } from '@/lib/xp/levels';
 
 export async function GET() {
   try {
-    const actorId = await getSessionMemberId();
+    // Phase 8D: the shared gate. This route used to inline the session and
+    // allowlist checks against the Phase 1C cookie; replacing that session
+    // meant touching it anyway, so it now shares lib/auth/require-manager.ts.
+    const auth = await requireXpManager();
 
-    if (!actorId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const actor = await getMemberProfile(actorId);
-
-    if (!actor || !actor.success) {
-      // The cookie is signed and unexpired but no longer maps to a member.
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Authorization. Same allowlist as POST /api/xp/award.
-    if (!isXpManager(actor.data.email)) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    if (!auth.ok) return auth.response;
 
     const [rows, levels] = await Promise.all([
-      getMemberDirectory(),
+      getActiveMembers(),
       getAllLevels(),
     ]);
 

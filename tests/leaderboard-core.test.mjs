@@ -31,6 +31,29 @@ const HACKATHON = [
   'win-hackathon',
 ].join(',');
 
+/**
+ * A signed-in member.
+ *
+ * Phase 8D replaced the custom cookie with Supabase Auth, and a session now
+ * means "this MEMBER is signed in", not merely "some member id is present" -
+ * the resolver loads the member behind the auth user. These tests used to set a
+ * bare member id; they set the member it names as well, which is what a real
+ * session always implied.
+ */
+const SESSION_MEMBER = {
+  id: MEMBER_1,
+  email: 'signed-in@dbcegoa.ac.in',
+  display_name: 'Signed In Member',
+  membership_status: 'active',
+  created_at: '2026-09-01T00:00:00Z',
+  updated_at: '2026-09-01T00:00:00Z',
+};
+
+function signIn() {
+  authState.memberId = SESSION_MEMBER.id;
+  dbState.profile = SESSION_MEMBER;
+}
+
 test('GET /api/leaderboard: 401 without a session', async () => {
   resetDbState();
   authState.memberId = null; // No session
@@ -41,7 +64,7 @@ test('GET /api/leaderboard: 401 without a session', async () => {
 
 test('GET /api/leaderboard: returns empty boards when no XP earned', async () => {
   resetDbState();
-  authState.memberId = 'member-1'; // Valid session
+  signIn();
 
   const res = await getLeaderboard();
   assert.strictEqual(res.status, 200);
@@ -55,7 +78,7 @@ test('GET /api/leaderboard: returns empty boards when no XP earned', async () =>
 
 test('GET /api/leaderboard: answers all three Handbook boards in order', async () => {
   resetDbState();
-  authState.memberId = 'member-1';
+  signIn();
 
   const res = await getLeaderboard();
   const payload = await res.json();
@@ -75,7 +98,7 @@ test('GET /api/leaderboard: answers all three Handbook boards in order', async (
 
 test('GET /api/leaderboard: ranks a populated board and shares ties', async () => {
   resetDbState();
-  authState.memberId = 'member-1';
+  signIn();
 
   // Basil 300, Aisha 300 (tie -> both rank 1), Cyril 120 -> rank 3.
   dbState.leaderboardRows.set(OVERALL, [
@@ -100,7 +123,7 @@ test('GET /api/leaderboard: ranks a populated board and shares ties', async () =
 
 test('GET /api/leaderboard: reports the same ties on a restricted board', async () => {
   resetDbState();
-  authState.memberId = 'member-1';
+  signIn();
 
   dbState.leaderboardRows.set(HACKATHON, [
     { memberId: MEMBER_1, displayName: 'Basil', xp: 100 },
@@ -130,7 +153,7 @@ test('GET /api/leaderboard: reports the same ties on a restricted board', async 
 
 test('GET /api/leaderboard: returns the current UTC month as a half-open range', async () => {
   resetDbState();
-  authState.memberId = 'member-1';
+  signIn();
 
   const res = await getLeaderboard();
   const payload = await res.json();
@@ -153,7 +176,7 @@ test('GET /api/leaderboard: returns the current UTC month as a half-open range',
 
 test('GET /api/leaderboard: every board read uses the same period', async () => {
   resetDbState();
-  authState.memberId = 'member-1';
+  signIn();
 
   await getLeaderboard();
 
@@ -166,7 +189,7 @@ test('GET /api/leaderboard: every board read uses the same period', async () => 
 
 test('GET /api/leaderboard: 500 when the aggregation is unavailable', async () => {
   resetDbState();
-  authState.memberId = 'member-1';
+  signIn();
   dbState.leaderboardFails = true;
 
   const res = await getLeaderboard();

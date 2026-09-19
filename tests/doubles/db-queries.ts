@@ -45,6 +45,8 @@ export type DoubledLevel = {
  * route consumes this shape, so the double must match it.
  */
 export type DoubledDirectoryRow = {
+  /** Phase 8E: null while the member is active. */
+  archivedAt?: string | null;
   memberId: string;
   email: string;
   displayName: string;
@@ -271,6 +273,31 @@ export const dbState = {
   ledgerLinksCalls: 0,
   /** When true, the link read simulates a database failure. */
   ledgerLinksFail: false,
+  /** Every auth_user_id write the activation flow attempted. */
+  authUserWrites: [] as { memberId: string; authUserId: string }[],
+  /** What the auth_user_id write should answer next. */
+  authUserWriteResult: true,
+  /** Every member the add flow tried to create. */
+  memberWrites: [] as {
+    displayName: string;
+    email: string;
+    membershipStatus: string;
+    membershipStart: string;
+  }[],
+  /** What the member insert should answer next. */
+  memberWriteResult: { ok: true, memberId: '77777777-7777-4777-8777-777777777777' } as
+    | { ok: true; memberId: string }
+    | { ok: false; duplicate: boolean },
+  /** Phase 8E: every archive/restore the routes attempted. */
+  archiveCalls: [] as { memberId: string; archivedBy: string }[],
+  restoreCalls: [] as string[],
+  /** What the archive/restore statement should answer next. */
+  lifecycleResult: { ok: true, member: null } as unknown,
+
+  /** Every status change the manager actions attempted. */
+  statusWrites: [] as { memberId: string; status: string }[],
+  /** What the status change should answer next. */
+  statusWriteResult: true,
 };
 
 export function resetDbState() {
@@ -321,6 +348,16 @@ export function resetDbState() {
   dbState.ledgerLinks = [];
   dbState.ledgerLinksCalls = 0;
   dbState.ledgerLinksFail = false;
+  dbState.authUserWrites = [];
+  dbState.authUserWriteResult = true;
+  dbState.memberWrites = [];
+  dbState.memberWriteResult = { ok: true, memberId: '77777777-7777-4777-8777-777777777777' };
+  dbState.statusWrites = [];
+  dbState.statusWriteResult = true;
+  dbState.archiveCalls = [];
+  dbState.restoreCalls = [];
+  dbState.lifecycleResult = { ok: true, member: null };
+  resetActivationState();
 }
 
 export async function getMemberProfile(memberId: string) {
@@ -492,4 +529,95 @@ export async function getXpLedgerEventLinks(): Promise<
   if (dbState.ledgerLinksFail) return null;
 
   return dbState.ledgerLinks;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8D: the auth / onboarding surface
+// ---------------------------------------------------------------------------
+
+/** What `getMemberActivation` should answer for the next lookup. */
+export const activationState = {
+  result: null as {
+    memberId: string;
+    membershipStatus: 'pending' | 'active' | 'inactive';
+    hasAuthAccount: boolean;
+  } | null,
+  emails: [] as string[],
+};
+
+export function resetActivationState() {
+  activationState.result = null;
+  activationState.emails = [];
+}
+
+export async function getMemberActivation(email: string) {
+  activationState.emails.push(email);
+
+  return activationState.result;
+}
+
+export async function setMemberAuthUser(memberId: string, authUserId: string) {
+  dbState.authUserWrites.push({ memberId, authUserId });
+
+  return dbState.authUserWriteResult;
+}
+
+export async function createMember(entry: {
+  displayName: string;
+  email: string;
+  membershipStatus: string;
+  membershipStart: string;
+}) {
+  dbState.memberWrites.push(entry);
+
+  return dbState.memberWriteResult;
+}
+
+export async function setMemberStatus(memberId: string, status: string) {
+  dbState.statusWrites.push({ memberId, status });
+
+  return dbState.statusWriteResult;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8E: the member lifecycle
+// ---------------------------------------------------------------------------
+
+/** A directory row's archive state defaults to active. */
+function archivedAtOf(row: DoubledDirectoryRow): string | null {
+  return row.archivedAt ?? null;
+}
+
+export async function getActiveMembers() {
+  const rows = await getMemberDirectory();
+
+  return rows === null ? null : rows.filter((row) => archivedAtOf(row) === null);
+}
+
+export async function getArchivedMembers() {
+  const rows = await getMemberDirectory();
+
+  return rows === null ? null : rows.filter((row) => archivedAtOf(row) !== null);
+}
+
+export async function getMemberArchiveState(memberId: string) {
+  const rows = await getMemberDirectory();
+
+  if (!rows) return null;
+
+  const row = rows.find((candidate) => candidate.memberId === memberId);
+
+  return row ? { memberId: row.memberId, archivedAt: archivedAtOf(row) } : null;
+}
+
+export async function archiveMember(memberId: string, archivedBy: string) {
+  dbState.archiveCalls.push({ memberId, archivedBy });
+
+  return dbState.lifecycleResult;
+}
+
+export async function restoreMember(memberId: string) {
+  dbState.restoreCalls.push(memberId);
+
+  return dbState.lifecycleResult;
 }

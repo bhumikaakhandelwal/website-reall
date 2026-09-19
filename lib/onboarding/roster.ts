@@ -91,8 +91,13 @@ export function normalizeName(raw: string): string {
  * Uses the same rule as the rest of the application (`z.string().email()` in
  * lib/db/schema.ts and the login route), so a roster email this accepts is one
  * the login flow will also accept.
+ *
+ * Exported since Phase 8D: the manager's Add Member form validates a
+ * hand-typed email, and it must accept exactly the same strings the roster
+ * importer would. A second copy of this rule is a second answer to "is this a
+ * valid DBCE email".
  */
-function isWellFormedEmail(email: string): boolean {
+export function isWellFormedEmail(email: string): boolean {
   return z.string().email().safeParse(email).success;
 }
 
