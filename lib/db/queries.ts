@@ -13,6 +13,8 @@ import {
   xpLedgerFullRowSchema,
   xpLedgerEventLinkRowSchema,
   memberArchiveRowSchema,
+  challengeRowSchema,
+  challengeSubmissionRowSchema,
 } from './schema';
 import { activeMembers, archivedMembers } from '@/lib/members/lifecycle';
 import type { LevelDefinition } from '@/lib/xp/levels';
@@ -1413,4 +1415,477 @@ export async function getMemberArchiveState(
   if (!row) return null;
 
   return { memberId: row.memberId, archivedAt: row.archivedAt };
+}
+// ---------------------------------------------------------------------------
+// Phase 9: challenges
+// ---------------------------------------------------------------------------
+
+/** One challenge, as read from the database. */
+export type ChallengeRecord = {
+  challengeId: string;
+  title: string;
+  slug: string;
+  /** A Handbook activity code from lib/xp/activities.ts. */
+  activityCode: string;
+  /** The Handbook XP value. Never chosen by a member. */
+  xpReward: number;
+  difficulty: 'beginner' | 'intermediate' | 'advanced';
+  description: string;
+  requirements: string;
+  estimatedHours: number;
+  submissionType: 'github_url' | 'text';
+  archivedAt: string | null;
+  createdAt: string;
+};
+
+/** One member's attempt at one challenge. */
+export type ChallengeSubmissionRecord = {
+  submissionId: string;
+  challengeId: string;
+  memberId: string;
+  githubUrl: string | null;
+  submissionText: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  managerFeedback: string | null;
+  reviewedAt: string | null;
+  /** Null until a manager approves. Non-null means an XP row exists. */
+  xpLedgerId: number | null;
+  createdAt: string;
+};
+
+function mapChallenge(row: unknown): ChallengeRecord | null {
+  const parsed = challengeRowSchema.safeParse(row);
+
+  if (!parsed.success) return null;
+
+  return {
+    challengeId: parsed.data.id,
+    title: parsed.data.title,
+    slug: parsed.data.slug,
+    activityCode: parsed.data.activity_code,
+    xpReward: parsed.data.xp_reward,
+    difficulty: parsed.data.difficulty,
+    description: parsed.data.description,
+    requirements: parsed.data.requirements,
+    estimatedHours: parsed.data.estimated_hours,
+    submissionType: parsed.data.submission_type,
+    archivedAt: parsed.data.archived_at,
+    createdAt: parsed.data.created_at,
+  };
+}
+
+function mapSubmission(row: unknown): ChallengeSubmissionRecord | null {
+  const parsed = challengeSubmissionRowSchema.safeParse(row);
+
+  if (!parsed.success) return null;
+
+  return {
+    submissionId: parsed.data.id,
+    challengeId: parsed.data.challenge_id,
+    memberId: parsed.data.member_id,
+    githubUrl: parsed.data.github_url,
+    submissionText: parsed.data.submission_text,
+    status: parsed.data.status,
+    managerFeedback: parsed.data.manager_feedback,
+    reviewedAt: parsed.data.reviewed_at,
+    xpLedgerId: parsed.data.xp_ledger_id,
+    createdAt: parsed.data.created_at,
+  };
+}
+
+const CHALLENGE_COLUMNS =
+  'id, title, slug, activity_code, xp_reward, difficulty, description, requirements, estimated_hours, submission_type, archived_at, archived_by, created_at';
+
+const SUBMISSION_COLUMNS =
+  'id, challenge_id, member_id, github_url, submission_text, status, manager_feedback, reviewed_by, reviewed_at, xp_ledger_id, created_at';
+
+/**
+ * Phase 9: every challenge a member may take, cheapest first.
+ *
+ * ARCHIVED CHALLENGES ARE EXCLUDED, so a challenge a manager has retired stops
+ * appearing on the homepage and stops accepting submissions - but the
+ * submissions already made against it stay readable, because archiving hides a
+ * challenge rather than deleting it.
+ */
+export async function getChallenges(): Promise<ChallengeRecord[] | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('challenges')
+    .select(CHALLENGE_COLUMNS)
+    .is('archived_at', null)
+    .order('xp_reward', { ascending: true })
+    .order('title', { ascending: true });
+
+  if (error || !data) return null;
+
+  if (!Array.isArray(data)) return null;
+
+  const challenges: ChallengeRecord[] = [];
+
+  for (const row of data as unknown[]) {
+    const challenge = mapChallenge(row);
+
+    if (!challenge) return null;
+
+    challenges.push(challenge);
+  }
+
+  return challenges;
+}
+
+/** Phase 9: every challenge including archived ones, for the manager page. */
+export async function getAllChallenges(): Promise<ChallengeRecord[] | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('challenges')
+    .select(CHALLENGE_COLUMNS)
+    .order('archived_at', { ascending: true, nullsFirst: true })
+    .order('title', { ascending: true });
+
+  if (error || !data) return null;
+
+  if (!Array.isArray(data)) return null;
+
+  const challenges: ChallengeRecord[] = [];
+
+  for (const row of data as unknown[]) {
+    const challenge = mapChallenge(row);
+
+    if (!challenge) return null;
+
+    challenges.push(challenge);
+  }
+
+  return challenges;
+}
+
+/**
+ * Phase 9: one challenge by slug.
+ *
+ * Archived challenges are still returned - a member who bookmarked the page, or
+ * whose submission is under review, must still be able to read it. The page
+ * decides what to show.
+ */
+export async function getChallengeBySlug(
+  slug: string
+): Promise<ChallengeRecord | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('challenges')
+    .select(CHALLENGE_COLUMNS)
+    .eq('slug', slug)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  return mapChallenge(data);
+}
+
+/**
+ * Phase 9: one member's submissions.
+ *
+ * Includes every status, because the page has to show a member their rejected
+ * attempts and the feedback on them - that is what "resubmit after rejection"
+ * requires.
+ */
+export async function getMemberSubmissions(
+  memberId: string
+): Promise<ChallengeSubmissionRecord[] | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('challenge_submissions')
+    .select(SUBMISSION_COLUMNS)
+    .eq('member_id', memberId)
+    .order('created_at', { ascending: false });
+
+  if (error || !data) return null;
+
+  if (!Array.isArray(data)) return null;
+
+  const submissions: ChallengeSubmissionRecord[] = [];
+
+  for (const row of data as unknown[]) {
+    const submission = mapSubmission(row);
+
+    if (!submission) return null;
+
+    submissions.push(submission);
+  }
+
+  return submissions;
+}
+
+/**
+ * Phase 9: the review queue.
+ *
+ * Every submission, newest first. The manager page groups them by status, so
+ * this reads them all rather than filtering, and the grouping is a pure
+ * function over the result.
+ */
+export async function getChallengeSubmissions(): Promise<
+  ChallengeSubmissionRecord[] | null
+> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('challenge_submissions')
+    .select(SUBMISSION_COLUMNS)
+    .order('created_at', { ascending: false });
+
+  if (error || !data) return null;
+
+  if (!Array.isArray(data)) return null;
+
+  const submissions: ChallengeSubmissionRecord[] = [];
+
+  for (const row of data as unknown[]) {
+    const submission = mapSubmission(row);
+
+    if (!submission) return null;
+
+    submissions.push(submission);
+  }
+
+  return submissions;
+}
+
+export type SubmissionWrite = {
+  challengeId: string;
+  memberId: string;
+  githubUrl: string | null;
+  submissionText: string | null;
+};
+
+export type SubmissionWriteResult =
+  | { ok: true; submissionId: string }
+  // The partial unique index rejected a second PENDING submission for the same
+  // member and challenge. Reported separately so the route can answer 409
+  // instead of 500, without a pre-flight read that could race.
+  | { ok: false; alreadyPending: boolean };
+
+/**
+ * Phase 9: record a submission.
+ *
+ * WRITES NO XP. There is no path from here to `xp_ledger` - the ledger is only
+ * ever touched by approve_challenge_submission. A submission is a claim, and the
+ * Handbook is explicit that XP is subject to approval.
+ *
+ * The one-pending-per-challenge rule is enforced by the database rather than by
+ * a check here, so two rapid clicks cannot both succeed.
+ */
+export async function createChallengeSubmission(
+  entry: SubmissionWrite
+): Promise<SubmissionWriteResult> {
+  const supabase = createAdminClient();
+
+  const submissionId = randomUUID();
+
+  const { error } = await supabase.from('challenge_submissions').insert({
+    id: submissionId,
+    challenge_id: entry.challengeId,
+    member_id: entry.memberId,
+    github_url: entry.githubUrl,
+    submission_text: entry.submissionText,
+  });
+
+  if (error) {
+    console.error('Error inserting challenge_submissions row:', error);
+    // 23505 is the partial unique index: a pending submission already exists.
+    return { ok: false, alreadyPending: error.code === '23505' };
+  }
+
+  return { ok: true, submissionId };
+}
+
+export type ReviewResult =
+  | { ok: true; ledgerId: number | null }
+  // The submission was already decided, or does not exist. The caller reports
+  // that rather than retrying, and nothing was written.
+  | { ok: false; outcome: 'not_found' | 'already_reviewed' | 'failed' };
+
+/**
+ * Phase 9: approve a submission - the ONLY way a challenge grants XP.
+ *
+ * Delegates to approve_challenge_submission, which locks the row, refuses
+ * unless it is still pending, inserts exactly one ledger row using the
+ * CHALLENGE OWN xp_reward, and stamps the submission. Approving twice cannot
+ * produce a second award.
+ *
+ * `reason` is the only caller-supplied text and is a display string composed in
+ * TypeScript, where the Handbook activity labels live. The XP amount is not
+ * passed at all - the function reads it from the challenges table.
+ */
+export async function approveChallengeSubmission(
+  submissionId: string,
+  reviewedBy: string,
+  reason: string
+): Promise<ReviewResult> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase.rpc('approve_challenge_submission', {
+    p_submission_id: submissionId,
+    p_reviewed_by: reviewedBy,
+    p_reason: reason,
+  });
+
+  if (error) {
+    // no_data_found is the function's own "no such submission".
+    if (error.code === 'P0002' || /does not exist/.test(error.message)) {
+      return { ok: false, outcome: 'not_found' };
+    }
+
+    console.error('Error approving challenge submission:', error);
+    return { ok: false, outcome: 'failed' };
+  }
+
+  // A set-returning function answers with a bare array. ZERO rows is the
+  // correct answer for "already reviewed", not a failure - and it is the
+  // guarantee that a double-click writes nothing.
+  if (!Array.isArray(data)) return { ok: false, outcome: 'failed' };
+
+  if (data.length === 0) return { ok: false, outcome: 'already_reviewed' };
+
+  const row = data[0] as Record<string, unknown>;
+
+  return {
+    ok: true,
+    ledgerId: typeof row.ledger_id === 'number' ? row.ledger_id : null,
+  };
+}
+
+/** Phase 9: reject a submission. Writes no XP and never touches the ledger. */
+export async function rejectChallengeSubmission(
+  submissionId: string,
+  reviewedBy: string,
+  feedback: string | null
+): Promise<ReviewResult> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase.rpc('reject_challenge_submission', {
+    p_submission_id: submissionId,
+    p_reviewed_by: reviewedBy,
+    p_feedback: feedback,
+  });
+
+  if (error) {
+    if (error.code === 'P0002' || /does not exist/.test(error.message)) {
+      return { ok: false, outcome: 'not_found' };
+    }
+
+    console.error('Error rejecting challenge submission:', error);
+    return { ok: false, outcome: 'failed' };
+  }
+
+  if (!Array.isArray(data)) return { ok: false, outcome: 'failed' };
+
+  if (data.length === 0) return { ok: false, outcome: 'already_reviewed' };
+
+  return { ok: true, ledgerId: null };
+}
+
+/** Phase 9: a challenge a manager is creating or editing. */
+export type ChallengeWrite = {
+  title: string;
+  slug: string;
+  activityCode: string;
+  xpReward: number;
+  difficulty: 'beginner' | 'intermediate' | 'advanced';
+  description: string;
+  requirements: string;
+  estimatedHours: number;
+  submissionType: 'github_url' | 'text';
+};
+
+export type ChallengeWriteResult =
+  | { ok: true; challengeId: string }
+  | { ok: false; duplicateSlug: boolean };
+
+/** Phase 9: create a challenge. */
+export async function createChallenge(
+  entry: ChallengeWrite
+): Promise<ChallengeWriteResult> {
+  const supabase = createAdminClient();
+
+  const challengeId = randomUUID();
+
+  const { error } = await supabase.from('challenges').insert({
+    id: challengeId,
+    title: entry.title,
+    slug: entry.slug,
+    activity_code: entry.activityCode,
+    xp_reward: entry.xpReward,
+    difficulty: entry.difficulty,
+    description: entry.description,
+    requirements: entry.requirements,
+    estimated_hours: entry.estimatedHours,
+    submission_type: entry.submissionType,
+  });
+
+  if (error) {
+    console.error('Error inserting challenges row:', error);
+    return { ok: false, duplicateSlug: error.code === '23505' };
+  }
+
+  return { ok: true, challengeId };
+}
+
+/**
+ * Phase 9: edit a challenge.
+ *
+ * The slug is deliberately NOT editable: it is the public URL, and changing it
+ * would break every link to the challenge. Everything else a manager may fix.
+ */
+export async function updateChallenge(
+  challengeId: string,
+  entry: Omit<ChallengeWrite, 'slug'>
+): Promise<boolean> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('challenges')
+    .update({
+      title: entry.title,
+      activity_code: entry.activityCode,
+      xp_reward: entry.xpReward,
+      difficulty: entry.difficulty,
+      description: entry.description,
+      requirements: entry.requirements,
+      estimated_hours: entry.estimatedHours,
+      submission_type: entry.submissionType,
+    })
+    .eq('id', challengeId)
+    .select('id');
+
+  if (error || !Array.isArray(data)) return false;
+
+  return data.length === 1;
+}
+
+/**
+ * Phase 9: archive a challenge.
+ *
+ * Guarded, exactly like Phase 8A event archive and 8E member archive: it can
+ * only ever fill an empty archive. Submissions already made are untouched - a
+ * challenge is hidden, never deleted, and never re-valued.
+ */
+export async function archiveChallenge(
+  challengeId: string,
+  archivedBy: string
+): Promise<boolean> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('challenges')
+    .update({ archived_at: new Date().toISOString(), archived_by: archivedBy })
+    .eq('id', challengeId)
+    .is('archived_at', null)
+    .select('id');
+
+  if (error || !Array.isArray(data)) return false;
+
+  return data.length === 1;
 }

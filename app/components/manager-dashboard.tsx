@@ -102,6 +102,13 @@ const QUICK_ACTIONS = [
     href: "/events",
     hint: "The event register, with attendance and awards",
   },
+  {
+    // Phase 9. Approving a challenge submission is the only way a challenge
+    // awards XP, so this is where the review queue lives.
+    label: "Challenges",
+    href: "/manager/challenges",
+    hint: "Review submissions and manage the catalogue",
+  },
 ];
 
 const SKELETON_ROWS = [0, 1, 2, 3, 4];

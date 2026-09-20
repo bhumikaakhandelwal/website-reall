@@ -294,6 +294,25 @@ export const dbState = {
   /** What the archive/restore statement should answer next. */
   lifecycleResult: { ok: true, member: null } as unknown,
 
+  /** Phase 9: the challenge catalogue and the submissions. */
+  challengeRows: [] as Record<string, unknown>[],
+  submissionRows: [] as Record<string, unknown>[],
+  challengeCalls: [] as string[],
+  /** What the submission insert should answer next. */
+  submissionWriteResult: { ok: true, submissionId: '99999999-9999-4999-8999-999999999999' } as unknown,
+  /** What the approve/reject RPC should answer next. */
+  reviewResult: { data: [{ ledger_id: 42 }], error: null } as unknown,
+  reviewCalls: [] as { fnName: string; args: unknown }[],
+
+  /** Phase 9: writes the challenge routes attempted. */
+  challengeSubmissionWrites: [] as Record<string, unknown>[],
+  challengeWrites: [] as Record<string, unknown>[],
+  challengeUpdates: [] as { challengeId: string; entry: Record<string, unknown> }[],
+  challengeArchives: [] as { challengeId: string; archivedBy: string }[],
+  challengeWriteResult: { ok: true, challengeId: '88888888-8888-4888-8888-888888888888' } as unknown,
+  challengeUpdateResult: true,
+  challengeArchiveResult: true,
+
   /** Every status change the manager actions attempted. */
   statusWrites: [] as { memberId: string; status: string }[],
   /** What the status change should answer next. */
@@ -354,6 +373,19 @@ export function resetDbState() {
   dbState.memberWriteResult = { ok: true, memberId: '77777777-7777-4777-8777-777777777777' };
   dbState.statusWrites = [];
   dbState.statusWriteResult = true;
+  dbState.challengeSubmissionWrites = [];
+  dbState.challengeWrites = [];
+  dbState.challengeUpdates = [];
+  dbState.challengeArchives = [];
+  dbState.challengeWriteResult = { ok: true, challengeId: '88888888-8888-4888-8888-888888888888' };
+  dbState.challengeUpdateResult = true;
+  dbState.challengeArchiveResult = true;
+  dbState.challengeRows = [];
+  dbState.submissionRows = [];
+  dbState.challengeCalls = [];
+  dbState.submissionWriteResult = { ok: true, submissionId: '99999999-9999-4999-8999-999999999999' };
+  dbState.reviewResult = { data: [{ ledger_id: 42 }], error: null };
+  dbState.reviewCalls = [];
   dbState.archiveCalls = [];
   dbState.restoreCalls = [];
   dbState.lifecycleResult = { ok: true, member: null };
@@ -620,4 +652,120 @@ export async function restoreMember(memberId: string) {
   dbState.restoreCalls.push(memberId);
 
   return dbState.lifecycleResult;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9: challenges
+// ---------------------------------------------------------------------------
+
+// The challenge doubles return the MAPPED (camelCase) shape, not raw rows:
+// every other double in this suite does the same, because the real
+// lib/db/queries.ts maps snake_case columns onto camelCase records. A double
+// that returned raw rows would give the routes `undefined` for every field -
+// which is exactly the trap this comment exists to prevent.
+export async function getChallenges() {
+  dbState.challengeCalls.push('getChallenges');
+
+  return dbState.challengeRows.filter((row) => row.archivedAt === null);
+}
+
+export async function getAllChallenges() {
+  dbState.challengeCalls.push('getAllChallenges');
+
+  return dbState.challengeRows;
+}
+
+export async function getChallengeBySlug(slug: string) {
+  dbState.challengeCalls.push(`getChallengeBySlug:${slug}`);
+
+  return dbState.challengeRows.find((row) => row.slug === slug) ?? null;
+}
+
+export async function getMemberSubmissions(memberId: string) {
+  dbState.challengeCalls.push('getMemberSubmissions');
+
+  return dbState.submissionRows.filter((row) => row.memberId === memberId);
+}
+
+export async function getChallengeSubmissions() {
+  dbState.challengeCalls.push('getChallengeSubmissions');
+
+  return dbState.submissionRows;
+}
+
+export async function createChallengeSubmission(entry: {
+  challengeId: string;
+  memberId: string;
+  githubUrl: string | null;
+  submissionText: string | null;
+}) {
+  dbState.challengeCalls.push('createChallengeSubmission');
+  dbState.challengeSubmissionWrites.push(entry);
+
+  return dbState.submissionWriteResult;
+}
+
+export async function approveChallengeSubmission(
+  submissionId: string,
+  reviewedBy: string,
+  reason: string
+) {
+  dbState.reviewCalls.push({
+    fnName: 'approve_challenge_submission',
+    args: { submissionId, reviewedBy, reason },
+  });
+
+  const result = dbState.reviewResult as { data?: unknown; error?: unknown } | null;
+
+  if (!result || result.error) return { ok: false, outcome: 'failed' };
+
+  if (!Array.isArray(result.data)) return { ok: false, outcome: 'failed' };
+
+  if (result.data.length === 0) return { ok: false, outcome: 'already_reviewed' };
+
+  const row = result.data[0] as Record<string, unknown>;
+
+  return { ok: true, ledgerId: typeof row.ledger_id === 'number' ? row.ledger_id : null };
+}
+
+export async function rejectChallengeSubmission(
+  submissionId: string,
+  reviewedBy: string,
+  feedback: string | null
+) {
+  dbState.reviewCalls.push({
+    fnName: 'reject_challenge_submission',
+    args: { submissionId, reviewedBy, feedback },
+  });
+
+  const result = dbState.reviewResult as { data?: unknown; error?: unknown } | null;
+
+  if (!result || result.error) return { ok: false, outcome: 'failed' };
+
+  if (!Array.isArray(result.data)) return { ok: false, outcome: 'failed' };
+
+  if (result.data.length === 0) return { ok: false, outcome: 'already_reviewed' };
+
+  return { ok: true, ledgerId: null };
+}
+
+export async function createChallenge(entry: Record<string, unknown>) {
+  dbState.challengeCalls.push('createChallenge');
+  dbState.challengeWrites.push(entry);
+
+  return dbState.challengeWriteResult;
+}
+
+export async function updateChallenge(challengeId: string, entry: Record<string, unknown>) {
+  dbState.challengeCalls.push('updateChallenge');
+  dbState.challengeUpdates.push({ challengeId, entry });
+
+  return dbState.challengeUpdateResult;
+}
+
+export async function archiveChallenge(challengeId: string, archivedBy: string) {
+  dbState.challengeCalls.push('archiveChallenge');
+  dbState.challengeArchives.push({ challengeId, archivedBy });
+
+  return dbState.challengeArchiveResult;
 }
