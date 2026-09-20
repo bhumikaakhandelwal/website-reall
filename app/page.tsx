@@ -2,6 +2,7 @@ import { constants } from "buffer";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { OpenChallenges } from "./components/open-challanges";
+import { getChallenges } from "@/lib/db/queries";
 
 export const metadata: Metadata = {
   title: "Home",
@@ -31,7 +32,19 @@ const faqs = [
   ],
 ];
 
-export default function Home() {
+// Phase 9: the homepage reads the real challenge catalogue.
+//
+// It is a server component, so it reads through the query layer directly rather
+// than through a public API - there is nothing to expose to the browser, and a
+// challenge list is not per-member.
+//
+// A FAILED READ RENDERS NO CARDS rather than an empty section: `getChallenges`
+// returns null for an error and [] for a genuinely empty catalogue, and both
+// mean "nothing to show here" on a public page. The alternative - a heading with
+// no cards under it - reads as a broken site.
+export default async function Home() {
+  const challenges = (await getChallenges()) ?? [];
+
   return (
     <main id="main-content" tabIndex={-1} className="home-page">
       {/* HERO */}
@@ -213,7 +226,15 @@ export default function Home() {
 </div>
   </section>
 <div id="open-challenges">
-  <OpenChallenges />
+  <OpenChallenges
+    challenges={challenges.map((challenge) => ({
+      slug: challenge.slug,
+      title: challenge.title,
+      xpReward: challenge.xpReward,
+      difficulty: challenge.difficulty,
+      description: challenge.description,
+    }))}
+  />
 </div>
 <section id="hackathon">
       {/* HACKATHON */}

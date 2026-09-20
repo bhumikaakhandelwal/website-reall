@@ -237,3 +237,56 @@ export const xpLedgerEventLinkRowSchema = z.object({
   xp_ledger_id: z.number().int(),
   event_id: z.string().uuid(),
 });
+// ---------------------------------------------------------------------------
+// Phase 9: challenges
+// ---------------------------------------------------------------------------
+
+export const challengeDifficultySchema = z.enum([
+  'beginner',
+  'intermediate',
+  'advanced',
+]);
+
+export const challengeSubmissionTypeSchema = z.enum(['github_url', 'text']);
+
+export const challengeSubmissionStatusSchema = z.enum([
+  'pending',
+  'approved',
+  'rejected',
+]);
+
+/** One row of the `challenges` table. */
+export const challengeRowSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string().min(1),
+  slug: z.string().min(1),
+  // Must be a Handbook activity code. Pinned to lib/xp/activities.ts by a test
+  // rather than by a CHECK constraint, because SQL cannot import TypeScript and
+  // the activity list is deliberately owned by the code.
+  activity_code: z.string().min(1),
+  xp_reward: z.number().int().positive(),
+  difficulty: challengeDifficultySchema,
+  description: z.string(),
+  requirements: z.string(),
+  estimated_hours: z.number().int().positive(),
+  submission_type: challengeSubmissionTypeSchema,
+  archived_at: z.string().nullable(),
+  archived_by: z.string().uuid().nullable(),
+  created_at: z.string(),
+});
+
+/** One row of the `challenge_submissions` table. */
+export const challengeSubmissionRowSchema = z.object({
+  id: z.string().uuid(),
+  challenge_id: z.string().uuid(),
+  member_id: z.string().uuid(),
+  github_url: z.string().nullable(),
+  submission_text: z.string().nullable(),
+  status: challengeSubmissionStatusSchema,
+  manager_feedback: z.string().nullable(),
+  reviewed_by: z.string().uuid().nullable(),
+  reviewed_at: z.string().nullable(),
+  // Null until approved. Non-null means an XP row exists for this submission.
+  xp_ledger_id: z.number().int().nullable(),
+  created_at: z.string(),
+});
