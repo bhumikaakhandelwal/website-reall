@@ -12,6 +12,7 @@
 // (Phase 7B). Nothing here writes XP - this phase creates events and lists them.
 
 import { XP_ACTIVITIES, getXpActivity } from '@/lib/xp/activities';
+import { formatIstWeekdayDate } from '@/lib/dates';
 
 /**
  * The closed vocabulary of club event types, with their display labels.
@@ -185,13 +186,11 @@ export function activityXpPreview(activityCode: string): string | null {
 export function formatEventDate(iso: string): string {
   if (!isCalendarDate(iso)) return iso;
 
-  return new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', {
-    weekday: 'short',
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
+  // Phase 10A: IST. The UTC pin stays - it is the ZONE that changed, not the
+  // principle. `new Date(...T00:00:00Z)` is midnight UTC on that calendar day,
+  // and formatting it in IST renders the same day (IST is ahead of UTC), so a
+  // date still cannot shift under a reader in another zone.
+  return formatIstWeekdayDate(`${iso}T00:00:00Z`);
 }
 
 /** One event as GET /api/events returns it. */

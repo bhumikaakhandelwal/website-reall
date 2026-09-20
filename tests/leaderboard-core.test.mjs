@@ -161,15 +161,21 @@ test('GET /api/leaderboard: returns the current UTC month as a half-open range',
   const start = new Date(payload.period.start);
   const end = new Date(payload.period.end);
 
-  assert.strictEqual(start.getUTCDate(), 1);
-  assert.strictEqual(start.getUTCHours(), 0);
-  assert.strictEqual(start.getUTCMinutes(), 0);
+  // Phase 10A: the window is the INDIAN month, so its boundaries are IST
+  // midnights expressed as UTC instants - 18:30 UTC the previous day. That is
+  // why the UTC date is the LAST day of the previous month, not the 1st.
+  const IST_MS = 330 * 60 * 1000;
+  const asIst = (d) => new Date(d.getTime() + IST_MS);
+
+  assert.strictEqual(asIst(start).getUTCDate(), 1);
+  assert.strictEqual(asIst(start).getUTCHours(), 0);
+  assert.strictEqual(asIst(start).getUTCMinutes(), 0);
   assert.strictEqual(start.getUTCSeconds(), 0);
   assert.strictEqual(start.getUTCMilliseconds(), 0);
 
-  // The end is the first instant of the next month, exclusive.
-  assert.strictEqual(end.getUTCDate(), 1);
-  assert.strictEqual(end.getUTCHours(), 0);
+  // The end is the first instant of the next IST month, exclusive.
+  assert.strictEqual(asIst(end).getUTCDate(), 1);
+  assert.strictEqual(asIst(end).getUTCHours(), 0);
   assert.ok(end > start);
   assert.strictEqual((end.getUTCMonth() - start.getUTCMonth() + 12) % 12, 1);
 });

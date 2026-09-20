@@ -1,5 +1,7 @@
 "use client";
 
+import { formatIstDateTime } from "@/lib/dates";
+
 // Phase 9: the manager's challenge console - the review queue and the catalogue.
 //
 // Presentation and wiring only. The decisions live in
@@ -71,7 +73,10 @@ const BUTTON_CLASS =
   "border border-border px-4 py-2 font-mono text-[10px] tracking-[0.1em] text-foreground transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40";
 
 function when(value: string): string {
-  return new Date(value).toISOString().slice(0, 16).replace("T", " ");
+  // Phase 10A: IST. This used to print the raw UTC instant with a "T" swapped
+  // for a space, which is not a date a manager should have to convert in their
+  // head.
+  return formatIstDateTime(value);
 }
 
 export function ChallengeManager() {

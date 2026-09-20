@@ -719,3 +719,97 @@ a {
   max-width: 520px;
   margin-top: 12px;
 }
+/* ---------------------------------------------------------------------------
+   Phase 10A: the council scan line.
+
+   Purely additive - nothing above this block is changed. A keyframe is the one
+   thing the council cards need that a utility class cannot express, which is why
+   it lives here rather than inline.
+
+   A single hairline with a soft orange highlight travelling along it, on a
+   seven-second loop: the same "INITIALIZING SESSION..." register the login page
+   uses, at a fraction of the intensity. It is decorative and marked
+   aria-hidden, and it stops entirely for anyone who has asked for reduced
+   motion.
+--------------------------------------------------------------------------- */
+
+@keyframes council-scan {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.85;
+  }
+  88% {
+    opacity: 0.85;
+  }
+  100% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.council-scan {
+  position: relative;
+  height: 1px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.council-scan::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 28%;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: council-scan 7s var(--motion-ease) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .council-scan::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Phase 10B: the club mark in the navigation.
+
+   Purely additive - nothing above this block is changed. A drop-shadow filter
+   is the one thing the mark needs that a utility class cannot express cleanly,
+   which is why it lives here rather than inline.
+
+   The glow is white and very faint, per the brief: the mark is polished silver
+   and the light should read as a sheen on metal, not neon. The hover is
+   deliberately small - a touch more brightness, a touch more glow, and a 1.03
+   scale. No rotation, and nothing that moves the layout.
+--------------------------------------------------------------------------- */
+
+.club-logo {
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.22))
+    drop-shadow(0 0 22px rgba(255, 255, 255, 0.1));
+  transition:
+    filter var(--motion-duration) var(--motion-ease),
+    transform var(--motion-duration) var(--motion-ease);
+}
+
+.club-logo-link:hover .club-logo,
+.club-logo-link:focus-visible .club-logo {
+  filter: brightness(1.08) drop-shadow(0 0 12px rgba(255, 255, 255, 0.34))
+    drop-shadow(0 0 26px rgba(255, 255, 255, 0.16));
+  transform: scale(1.03);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .club-logo {
+    transition: none;
+  }
+
+  .club-logo-link:hover .club-logo,
+  .club-logo-link:focus-visible .club-logo {
+    transform: none;
+  }
+}

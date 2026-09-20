@@ -19,7 +19,7 @@
 import { NextResponse } from 'next/server';
 import { getMonthlyLeaderboard } from '@/lib/db/queries';
 import { requireMember } from '@/lib/auth/require-manager';
-import { LEADERBOARDS, assignRanks, utcMonthPeriod } from '@/lib/xp/leaderboards';
+import { LEADERBOARDS, assignRanks, istMonthPeriod } from '@/lib/xp/leaderboards';
 
 export async function GET() {
   try {
@@ -33,7 +33,7 @@ export async function GET() {
 
     // The current leaderboard month, as [start, end). Both bounds are computed
     // once, in UTC, and handed to the database as an explicit range.
-    const period = utcMonthPeriod();
+    const period = istMonthPeriod();
 
     // One query per Handbook leaderboard, each restricted to its own activity
     // codes (null = every activity, for the overall board).

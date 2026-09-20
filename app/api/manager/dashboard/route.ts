@@ -25,7 +25,7 @@
 //
 // The member counts come from the directory's own roster rather than a new
 // COUNT function, so this page and /members can never disagree about how many
-// members there are. `period` comes from utcMonthPeriod() - the same UTC month
+// members there are. `period` comes from istMonthPeriod() - the same UTC month
 // the leaderboards use - so "this month" means one thing across the whole
 // application.
 //
@@ -45,7 +45,7 @@ import {
   getRecentXpEntries,
 } from '@/lib/db/queries';
 import { requireXpManager } from '@/lib/auth/require-manager';
-import { utcMonthPeriod } from '@/lib/xp/leaderboards';
+import { istMonthPeriod } from '@/lib/xp/leaderboards';
 import { RECENT_ENTRY_LIMIT, summariseDashboard } from '@/lib/manager/dashboard';
 
 export async function GET() {
@@ -58,7 +58,7 @@ export async function GET() {
 
     // The current month, as [start, end). Computed once, in UTC, and handed to
     // the database as an explicit range.
-    const period = utcMonthPeriod();
+    const period = istMonthPeriod();
 
     const [members, monthXp, entries] = await Promise.all([
       getMemberDirectory(),

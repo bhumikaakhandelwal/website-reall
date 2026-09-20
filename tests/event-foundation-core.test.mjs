@@ -351,8 +351,8 @@ test('activityXpPreview is null when nothing is chosen', () => {
 // ---------------------------------------------------------------------------
 
 test('formatEventDate renders a stored date', () => {
-  assert.strictEqual(formatEventDate('2026-09-18'), 'Fri, Sep 18, 2026');
-  assert.strictEqual(formatEventDate('2026-01-01'), 'Thu, Jan 01, 2026');
+  assert.strictEqual(formatEventDate('2026-09-18'), 'Fri, 18 Sept, 2026');
+  assert.strictEqual(formatEventDate('2026-01-01'), 'Thu, 01 Jan, 2026');
 });
 
 test('formatEventDate returns an invalid date unchanged', () => {
@@ -384,7 +384,7 @@ console.log(JSON.stringify({
 
     assert.deepStrictEqual(
       JSON.parse(output),
-      { event: 'Fri, Sep 18, 2026', first: 'Thu, Jan 01, 2026' },
+      { event: 'Fri, 18 Sept, 2026', first: 'Thu, 01 Jan, 2026' },
       `formatting must be UTC-pinned, but TZ=${TZ} produced ${output.trim()}`
     );
   }

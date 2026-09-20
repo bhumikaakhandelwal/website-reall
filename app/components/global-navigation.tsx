@@ -159,14 +159,41 @@ export function GlobalNavigation() {
     <header className="border-b border-border bg-background">
       <Container className="flex min-h-[var(--nav-height)] items-center justify-between gap-6 px-page">
 
-        {/* LOGO */}
+          {/*
+            LOGO
 
-        <Link
-          href="/"
-          className="text-sm font-semibold tracking-tight text-foreground"
-        >
-          DBCE Coders Club
-        </Link>
+            The club mark, then the name stacked over the city. Phase 10B:
+            this slot used to be the text alone, so the layout around it is
+            unchanged - the mark sits where the "D" was, and the two text
+            lines keep the weight and tracking the single line had.
+
+            `shrink-0` so the mark can never be squeezed by the links; the
+            header is a justify-between flex row with a gap, so it never
+            overlaps them.
+          */}
+          <Link
+            href="/"
+            className="club-logo-link flex shrink-0 items-center gap-3"
+          >
+            <Image
+              src="/logo.png"
+              alt="DBCE Coders Club logo"
+              width={332}
+              height={200}
+              priority
+              className="club-logo h-9 w-auto sm:h-11 sm:w-auto"
+            />
+
+            <span className="flex flex-col leading-none">
+              <span className="text-sm font-semibold tracking-tight text-foreground">
+                DBCE Coders Club
+              </span>
+
+              <span className="mt-1 font-mono text-[0.6rem] uppercase tracking-[0.18em] text-muted">
+                Goa
+              </span>
+            </span>
+          </Link>
 
         <nav aria-label="Primary navigation" className="relative">
 

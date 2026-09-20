@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { formatIstDate } from "@/lib/dates";
 import { Container } from "../../components/container";
 import { ChallengeSubmissionForm } from "../../components/challenge-submission-form";
 import { getChallengeBySlug, getMemberSubmissions } from "@/lib/db/queries";
@@ -195,9 +196,9 @@ export default async function ChallengePage({
                     </span>
 
                     <span className="font-mono text-xs text-muted">
-                      {submission.reviewedAt
-                        ? new Date(submission.reviewedAt).toISOString().slice(0, 10)
-                        : new Date(submission.createdAt).toISOString().slice(0, 10)}
+                      {formatIstDate(
+                        submission.reviewedAt ?? submission.createdAt
+                      )}
                     </span>
                   </div>
 

@@ -23,6 +23,7 @@
 // `loadDirectory` after a successful award so the new total and level appear
 // immediately, rather than the manager having to reload the page.
 
+import { formatIstDate } from "@/lib/dates";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -57,12 +58,8 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
 // database in UTC, and a join date must not shift a day with the visitor's
 // timezone.
 function formatJoined(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+  // Phase 10A: the club's own calendar, in IST.
+  return formatIstDate(iso);
 }
 
 // Display-only. The stored value stays the enum the database enforces; this

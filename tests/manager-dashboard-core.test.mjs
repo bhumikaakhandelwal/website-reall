@@ -129,13 +129,15 @@ test('the month label and timestamp do not move with the visitor timezone', () =
   for (const TZ of zones) {
     const output = execFileSync(
       process.execPath,
-      ['--input-type=module', '-e', TZ_PROBE],
+      // The hooks teach the child the app's `@/` alias, which the module
+      // graph now needs: dashboard.ts formats through lib/dates.ts.
+      ['--import', './tests/helpers/hooks.mjs', '--input-type=module', '-e', TZ_PROBE],
       { env: { ...process.env, TZ }, encoding: 'utf8' }
     );
 
     assert.deepStrictEqual(
       JSON.parse(output),
-      { month: 'September 2026', timestamp: 'Sep 17, 2026, 22:13' },
+      { month: 'September 2026', timestamp: '18 Sept 2026, 03:43' },
       `formatting must be UTC-pinned, but TZ=${TZ} produced ${output.trim()}`
     );
   }
@@ -162,19 +164,21 @@ test('formatMonthLabel handles the year boundary in both directions', () => {
   );
 });
 
-test('formatMonthLabel works from a period produced by utcMonthPeriod', async () => {
+test('formatMonthLabel works from a period produced by istMonthPeriod', async () => {
   // The real source of the period, so the two cannot disagree about which month
   // a given instant falls in.
-  const { utcMonthPeriod } = await import('@/lib/xp/leaderboards');
+  const { istMonthPeriod } = await import('@/lib/xp/leaderboards');
 
   assert.strictEqual(
-    formatMonthLabel(utcMonthPeriod(new Date('2026-09-18T02:46:28Z'))),
+    formatMonthLabel(istMonthPeriod(new Date('2026-09-18T02:46:28Z'))),
     'September 2026'
   );
-  // 23:30 UTC on the last day of the month is still that month.
+  // 23:30 UTC on 30 September is already 05:00 on 1 October in IST, so the
+  // club's month is October. That is the point of Phase 10A: the label and
+  // the window follow the club's calendar, not UTC's.
   assert.strictEqual(
-    formatMonthLabel(utcMonthPeriod(new Date('2026-09-30T23:30:00Z'))),
-    'September 2026'
+    formatMonthLabel(istMonthPeriod(new Date('2026-09-30T23:30:00Z'))),
+      'October 2026'
   );
 });
 
@@ -204,19 +208,20 @@ test('formatSignedXp renders zero unsigned', () => {
 // formatLedgerTimestamp
 // ---------------------------------------------------------------------------
 
-test('formatLedgerTimestamp renders the UTC instant', () => {
+test('formatLedgerTimestamp renders the instant in IST', () => {
   assert.strictEqual(
     formatLedgerTimestamp('2026-09-17T22:13:22.202146+00:00'),
-    'Sep 17, 2026, 22:13'
+    '18 Sept 2026, 03:43'
   );
 });
 
-test('formatLedgerTimestamp renders midnight as 00:00, not 24:00', () => {
+test('formatLedgerTimestamp renders IST midnight as 00:00, not 24:00', () => {
   // A known ICU quirk with hour12: false; the ledger's first entry of a month
-  // would otherwise read as the end of the previous day.
+  // would otherwise read as the end of the previous day. IST midnight is 18:30
+  // UTC the day before, which is the instant that would trip it.
   assert.strictEqual(
-    formatLedgerTimestamp('2026-09-01T00:00:00.000Z'),
-    'Sep 01, 2026, 00:00'
+    formatLedgerTimestamp('2026-08-31T18:30:00.000Z'),
+    '01 Sept 2026, 00:00'
   );
 });
 
@@ -348,7 +353,7 @@ test('summariseDashboard formats each entry for display', () => {
       xpAmount: -300,
       xpLabel: '-300',
       reason: 'test',
-      timestamp: 'Sep 17, 2026, 22:13',
+      timestamp: '18 Sept 2026, 03:43',
       createdAt: '2026-09-17T22:13:22.202146+00:00',
     },
     {
@@ -358,7 +363,7 @@ test('summariseDashboard formats each entry for display', () => {
       xpAmount: 50,
       xpLabel: '+50',
       reason: 'Membership',
-      timestamp: 'Sep 17, 2026, 22:13',
+      timestamp: '18 Sept 2026, 03:43',
       createdAt: '2026-09-17T22:13:22.202146+00:00',
     },
   ]);
@@ -526,7 +531,7 @@ test('the dashboard returns the cards, the period and the recent entries', async
       xpAmount: -300,
       xpLabel: '-300',
       reason: 'test',
-      timestamp: 'Sep 17, 2026, 22:13',
+      timestamp: '18 Sept 2026, 03:43',
       createdAt: '2026-09-17T22:13:22.202146+00:00',
     },
   ]);
@@ -535,11 +540,22 @@ test('the dashboard returns the cards, the period and the recent entries', async
   // describe, exactly as GET /api/leaderboard does.
   assert.strictEqual(typeof payload.period.start, 'string');
   assert.strictEqual(typeof payload.period.end, 'string');
-  assert.strictEqual(new Date(payload.period.start).getUTCDate(), 1);
-  assert.strictEqual(new Date(payload.period.start).getUTCHours(), 0);
+  // Phase 10A: the window is the IST month.
+  const IST_MS = 330 * 60 * 1000;
+  assert.strictEqual(
+    new Date(new Date(payload.period.start).getTime() + IST_MS).getUTCDate(),
+    1
+  );
+  // Phase 10A: the boundary is an IST midnight, which is 18:30 UTC.
+  assert.strictEqual(
+    new Date(
+      new Date(payload.period.start).getTime() + 330 * 60 * 1000
+    ).getUTCHours(),
+    0
+  );
 });
 
-test('the dashboard asks for the current UTC month, half-open', async () => {
+test('the dashboard asks for the current IST month, half-open', async () => {
   reset();
   signInAs(BASIL);
   dbState.profile = BASIL;
@@ -554,14 +570,19 @@ test('the dashboard asks for the current UTC month, half-open', async () => {
 
   // Midnight on the 1st, to midnight on the 1st of the next month - and the
   // window must contain the instant the request was made.
-  assert.strictEqual(start.getUTCDate(), 1);
-  assert.strictEqual(start.getUTCHours(), 0);
-  assert.strictEqual(start.getUTCMinutes(), 0);
+  // Phase 10A: an IST month boundary is 18:30 UTC the previous day, so the UTC
+  // date is the last day of the previous month.
+  const IST_MS = 330 * 60 * 1000;
+  const asIst = (d) => new Date(d.getTime() + IST_MS);
+
+  assert.strictEqual(asIst(start).getUTCDate(), 1);
+  assert.strictEqual(asIst(start).getUTCHours(), 0);
+  assert.strictEqual(asIst(start).getUTCMinutes(), 0);
   assert.strictEqual(start.getUTCSeconds(), 0);
   assert.strictEqual(start.getUTCMilliseconds(), 0);
 
-  assert.strictEqual(end.getUTCDate(), 1);
-  assert.strictEqual(end.getUTCHours(), 0);
+  assert.strictEqual(asIst(end).getUTCDate(), 1);
+  assert.strictEqual(asIst(end).getUTCHours(), 0);
 
   assert.ok(start <= before, 'the window must start at or before the request');
   assert.ok(end > after, 'the window must end after the request');

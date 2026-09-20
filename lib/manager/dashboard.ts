@@ -1,3 +1,4 @@
+import { formatIstDateTime, formatIstMonth } from '@/lib/dates';
 // Phase 5C: the manager dashboard's derivations.
 //
 // Everything the dashboard DECIDES lives here, as plain functions, for the same
@@ -82,11 +83,10 @@ export type DashboardSummary = {
  * world. /leaderboard's own month label is formatted the same way.
  */
 export function formatMonthLabel(period: { start: Date }): string {
-  return period.start.toLocaleDateString('en-US', {
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
+  // Phase 10A: the month label is the club's month, formatted in IST by
+  // lib/dates.ts. `period.start` is now an IST month boundary too, so the label
+  // and the window it describes cannot disagree.
+  return formatIstMonth(period.start);
 }
 
 /**
@@ -116,22 +116,11 @@ export function formatSignedXp(amount: number): string {
  * shown, unlike the directory's date-only join column.
  */
 export function formatLedgerTimestamp(iso: string): string {
-  const date = new Date(iso);
-
-  // Exported and generic, so an unparseable value is returned as-is rather
-  // than rendered as "Invalid Date". The row schema rejects such a value before
-  // it reaches here, so this is a guard rather than a code path.
-  if (Number.isNaN(date.getTime())) return iso;
-
-  return date.toLocaleString('en-US', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-    timeZone: 'UTC',
-  });
+  // Phase 10A: IST, so a manager in Goa reads the club's own clock rather than
+  // the server's. Still PINNED, never the visitor's - see lib/dates.ts for why
+  // that distinction matters. The formatter returns an unparseable value
+  // unchanged, which is the guard this function used to make itself.
+  return formatIstDateTime(iso);
 }
 
 /**

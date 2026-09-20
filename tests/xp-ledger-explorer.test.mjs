@@ -238,7 +238,7 @@ test('a missing reason is stated plainly', () => {
 test('the timestamp is formatted in UTC', () => {
   const enriched = enrichLedgerEntries([row()], MEMBERS, [], EVENTS);
 
-  assert.strictEqual(enriched[0].timestamp, 'Sep 17, 2026, 22:13');
+  assert.strictEqual(enriched[0].timestamp, '18 Sept 2026, 03:43');
   // The raw instant is kept for a <time dateTime> attribute.
   assert.strictEqual(enriched[0].createdAt, '2026-09-17T22:13:22.202146+00:00');
 });

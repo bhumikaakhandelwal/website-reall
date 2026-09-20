@@ -1,5 +1,7 @@
 "use client";
 
+import { formatIstMonth } from "@/lib/dates";
+
 // Phase 4: the three monthly leaderboards, read from GET /api/leaderboard.
 //
 // Presentation only — the ranking is computed server-side from xp_ledger.
@@ -46,11 +48,9 @@ const SKELETON_ROWS = [0, 1, 2];
 // Explicit locale and UTC: the month boundary comes from the server in UTC, and
 // the label must not shift with the visitor's locale or timezone.
 function formatMonth(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+  // Phase 10A: the club's month, in IST. The window this label describes comes
+  // from the same timezone (lib/dates.ts), so the two cannot disagree.
+  return formatIstMonth(iso);
 }
 
 export function LeaderboardBoards() {

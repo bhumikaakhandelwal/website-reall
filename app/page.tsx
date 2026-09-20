@@ -3,6 +3,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { OpenChallenges } from "./components/open-challanges";
 import { getChallenges } from "@/lib/db/queries";
+import {
+  EXECUTIVE_COUNCIL,
+  councilNumber,
+  isSharedRole,
+  roleMarker,
+  rolePosition,
+  roleSize,
+} from "./content/council";
 
 export const metadata: Metadata = {
   title: "Home",
@@ -11,11 +19,7 @@ export const metadata: Metadata = {
 };
 
 
-const leaderboard = [
-  ["01", "Sania Suleman", "7,500 XP"],
-  ["02", "Bhumika Khandelwal", "7,480 XP"],
-  ["03", "Akhil Nair", "6,480 XP"],
-];
+
 
 const faqs = [
   [
@@ -326,7 +330,7 @@ export default async function Home() {
   {/* LEFT */}
   <div>
     <p className="label-eyebrow text-muted-foreground mb-6">
-      GAMIFIED LEARNING
+      EXECUTIVE COUNCIL
     </p>
 
     <h2 className="font-display text-7xl font-medium leading-[0.85] tracking-tight text-white md:text-8xl lg:text-9xl">
@@ -381,16 +385,110 @@ export default async function Home() {
   </div>
 </div>
 
-        <div className="xp-cards">
-          {leaderboard.map(([rank, name, xp], index) => (
-            <article className={index === 0 ? "xp-card active" : "xp-card"} key={name}>
-              <small>{rank}</small>
-              <strong>{name}</strong>
-              <span>Club member</span>
-              <b>{xp}</b>
-            </article>
-          ))}
+        {/*
+          Phase 10A: the Council Showcase.
+
+          Replaces the three-card XP strip. No XP appears here at all - council
+          office is service, not points - and the numbering in the corner is a
+          decorative counter, not a ranking. The President leads the array in
+          app/content/council.ts, so the featured lime card follows from the data
+          rather than being a special case.
+
+          3 columns on desktop, 2 on tablet, 1 on mobile. The cards carry the
+          same charcoal-and-lime palette, mono micro-labels and tight tracking as
+          the rest of the panel; the hover lift and the thin orange rule are the
+          only additions, and both are restrained.
+        */}
+        <div className="mt-16 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {EXECUTIVE_COUNCIL.map((member, index) => {
+            const featured = index === 0;
+
+            // A role held by more than one member - the two Tech Leads, the
+            // three PR & Outreach - is marked so it reads as a shared post
+            // rather than a title someone typed twice. Derived from the title,
+            // never from a list of names: see app/content/council.ts.
+            const shared = isSharedRole(member.title);
+            const marker = roleMarker(member.title);
+
+            return (
+              <article
+                key={member.name}
+                className={[
+                  // The President sits ~15% taller than the rest, so the card
+                  // anchors the section without leaving its column.
+                  featured ? "min-h-[230px]" : "min-h-[200px]",
+                  "group relative flex flex-col overflow-hidden border-t-2 p-6",
+                  "transition-all duration-300 ease-out hover:-translate-y-1",
+                  featured
+                    ? // `bg-[var(--lime)]`, NOT `bg-lime`: there is no
+                      // `--color-lime` in the Tailwind theme, so `bg-lime`
+                      // compiles to nothing and the card fell back to the dark
+                      // panel behind it - leaving dark text on a dark ground.
+                      // This is the club's lime, the same one the old XP strip
+                      // used.
+                      "border-accent bg-[var(--lime)] text-foreground"
+                    : shared
+                      ? // The shared accent: the same orange rule on every
+                        // holder, lit permanently rather than only on hover, and
+                        // the same faint glow, so the group reads as a set even
+                        // where the grid breaks between two of its cards.
+                        "border-accent/35 bg-gradient-to-b from-[#2f342e] to-[#22261f] text-white shadow-[0_0_30px_-16px_rgba(232,92,61,0.6)] hover:border-accent hover:shadow-[0_18px_40px_-24px_rgba(232,92,61,0.55)]"
+                      : "border-transparent bg-gradient-to-b from-[#2f342e] to-[#22261f] text-white hover:border-accent hover:shadow-[0_18px_40px_-24px_rgba(232,92,61,0.55)]",
+                ].join(" ")}
+              >
+                {featured && (
+                  <span className="absolute right-6 top-6 font-mono text-[0.6rem] font-bold uppercase tracking-[0.18em] text-accent-text">
+                    President
+                  </span>
+                )}
+
+                <small
+                  className={[
+                    "font-mono text-[0.7rem] tracking-[0.18em]",
+                    featured ? "text-foreground/60" : "text-accent",
+                  ].join(" ")}
+                >
+                  {councilNumber(index)}
+                </small>
+
+                <strong className="mt-auto block text-xl font-semibold leading-tight tracking-[-0.02em]">
+                  {member.name}
+                </strong>
+
+                <span
+                  className={[
+                    "mt-2 font-mono text-[0.7rem] uppercase tracking-[0.14em]",
+                    // Dark on lime, and orange on charcoal. The badge carries
+                    // the orange on the featured card instead.
+                    featured ? "text-foreground/70" : "text-accent",
+                  ].join(" ")}
+                >
+                  {marker !== null && (
+                    <>
+                      <span aria-hidden="true" className="mr-2 tracking-[0.1em]">
+                        {marker}
+                      </span>
+
+                      {/* The glyph carries the meaning visually; this is what a
+                          screen reader gets instead of a row of diamonds. */}
+                      <span className="sr-only">
+                        Shared role, {rolePosition(member)} of{" "}
+                        {roleSize(member.title)}.{" "}
+                      </span>
+                    </>
+                  )}
+
+                  {member.title}
+                </span>
+              </article>
+            );
+          })}
         </div>
+
+        {/* A restrained terminal-style scan, matching the site's
+            "INITIALIZING SESSION..." register. Decorative, and it stops for
+            anyone who has asked for reduced motion. */}
+        <div aria-hidden="true" className="council-scan mt-10" />
 
         
       </section>

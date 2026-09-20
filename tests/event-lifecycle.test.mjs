@@ -208,13 +208,13 @@ test('every event lands in exactly one group', () => {
 // ---------------------------------------------------------------------------
 
 test('formatArchivedDate renders the UTC date of the archive', () => {
-  assert.strictEqual(formatArchivedDate('2026-09-19T10:00:00.000Z'), 'Sat, Sep 19, 2026');
+  assert.strictEqual(formatArchivedDate('2026-09-19T10:00:00.000Z'), 'Sat, 19 Sept, 2026');
 });
 
 test('formatArchivedDate does not slip a day for a late-UTC archive', () => {
   // 23:30 UTC is still the 19th. Formatting locally would render the 20th for
   // anyone east of UTC, which is the bug class the whole project pins against.
-  assert.strictEqual(formatArchivedDate('2026-09-19T23:30:00.000Z'), 'Sat, Sep 19, 2026');
+  assert.strictEqual(formatArchivedDate('2026-09-19T23:30:00.000Z'), 'Sat, 19 Sept, 2026');
 });
 
 // ---------------------------------------------------------------------------

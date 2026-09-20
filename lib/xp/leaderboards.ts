@@ -78,6 +78,8 @@ export function assignRanks<T extends { xp: number }>(
   });
 }
 
+import { istMonthPeriod as clubMonthPeriod } from '@/lib/dates';
+
 export type MonthlyPeriod = {
   /** First instant of the month, inclusive. */
   start: Date;
@@ -86,26 +88,27 @@ export type MonthlyPeriod = {
 };
 
 /**
- * The current leaderboard month, as the half-open range [start, end).
- *
- * Leaderboards are monthly (Handbook). The month is the **UTC calendar month**,
- * because every timestamp in the project is a TIMESTAMPTZ written by the
- * database's `NOW()` in its default UTC session timezone - there is no
- * application-level timezone anywhere, and inventing one would make "this
- * month" mean different things to the website and the ledger.
- *
- * `Date.UTC` performs exact calendar arithmetic, so the window is correct
- * across month lengths, leap years and DST boundaries alike. The end instant is
- * computed here rather than as `period_start + 1 month` in SQL, because that
- * SQL arithmetic is evaluated in the session timezone and can land an hour off
- * across a DST change.
- */
-export function utcMonthPeriod(now: Date = new Date()): MonthlyPeriod {
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth();
-
-  return {
-    start: new Date(Date.UTC(year, month, 1)),
-    end: new Date(Date.UTC(year, month + 1, 1)),
-  };
+   * The current leaderboard month, as the half-open range [start, end).
+   *
+   * Phase 10A: THE INDIAN MONTH. This was `utcMonthPeriod`, and its own comment
+   * justified the UTC calendar month on the grounds that "there is no
+   * application-level timezone anywhere" - a premise this phase ends. The club
+   * is in Goa and the site now labels the month in IST, so the window has to
+   * agree with the label; a UTC window under an IST heading would disagree for
+   * five and a half hours at every month boundary, showing August's entries
+   * under "September 2026".
+   *
+   * The boundaries are IST midnights expressed as UTC instants, which is what
+   * the database is queried with. `Date.UTC` performs exact calendar
+   * arithmetic, so the window is correct across month lengths and leap years
+   * alike. The end instant is computed here rather than as
+   * `period_start + 1 month` in SQL, because that SQL arithmetic is evaluated
+   * in the session timezone and can land an hour off across a DST change.
+   *
+   * The aggregation, the ranking and the row mapping are untouched.
+   */
+  
+export function istMonthPeriod(now: Date = new Date()): MonthlyPeriod {
+  return clubMonthPeriod(now);
 }
+
