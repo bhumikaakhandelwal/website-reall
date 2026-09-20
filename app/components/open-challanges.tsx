@@ -1,28 +1,39 @@
-const challenges = [
-  {
-    level: "BEGINNER",
-    xp: "150 XP",
-    title: "Ship your first CLI",
-    description:
-      "A weekend-sized task to get comfortable with Git, testing, and shipping.",
-  },
-  {
-    level: "INTERMEDIATE",
-    xp: "400 XP",
-    title: "Rebuild an API",
-    description:
-      "Take a public API, reimplement it, and defend your schema choices.",
-  },
-  {
-    level: "ADVANCED",
-    xp: "900 XP",
-    title: "Open-source patch",
-    description:
-      "Land a merged pull request in a real repository used by real people.",
-  },
-];
+import Link from "next/link";
 
-export function OpenChallenges() {
+// Phase 9: the homepage challenge cards.
+//
+// The card markup is UNCHANGED from the placeholder version - same section, same
+// grid, same typography, same hover. What changed is the data and the call to
+// action: the cards now come from the `challenges` table and each one links to
+// its own page.
+//
+// The 150 / 400 / 900 XP placeholders are gone. Every amount shown here is the
+// Handbook value for the challenge's activity, read from the database.
+
+export type HomeChallenge = {
+  slug: string;
+  title: string;
+  xpReward: number;
+  difficulty: string;
+  description: string;
+};
+
+const DIFFICULTY_LABELS: Record<string, string> = {
+  beginner: "BEGINNER",
+  intermediate: "INTERMEDIATE",
+  advanced: "ADVANCED",
+};
+
+export function OpenChallenges({
+  challenges,
+}: {
+  challenges: readonly HomeChallenge[];
+}) {
+  // Nothing to show is a real state - every challenge could be archived, or the
+  // read could have failed. The section is omitted rather than rendered empty,
+  // because an empty "Open challenges" heading reads as a bug.
+  if (challenges.length === 0) return null;
+
   return (
     <section className="px-page pt-4 pb-20">
       <div className="mx-auto max-w-content">
@@ -46,17 +57,17 @@ export function OpenChallenges() {
         <div className="grid gap-6 md:grid-cols-3">
           {challenges.map((challenge) => (
             <article
-              key={challenge.title}
+              key={challenge.slug}
               className="group flex min-h-[330px] flex-col justify-between border border-border bg-background p-8 transition-all duration-300 hover:-translate-y-1 hover:border-foreground"
             >
               <div>
                 <div className="mb-16 flex items-center justify-between">
                   <span className="label-eyebrow text-muted">
-                    {challenge.level}
+                    {DIFFICULTY_LABELS[challenge.difficulty] ?? challenge.difficulty}
                   </span>
 
                   <span className="label-eyebrow text-accent">
-                    {challenge.xp}
+                    {challenge.xpReward} XP
                   </span>
                 </div>
 
@@ -69,9 +80,12 @@ export function OpenChallenges() {
                 </p>
               </div>
 
-              <button className="mt-10 w-fit text-sm font-medium transition-transform duration-300 group-hover:translate-x-1">
+              <Link
+                href={`/challenges/${challenge.slug}`}
+                className="mt-10 w-fit text-sm font-medium transition-transform duration-300 group-hover:translate-x-1"
+              >
                 Take the challenge ↗
-              </button>
+              </Link>
             </article>
           ))}
         </div>

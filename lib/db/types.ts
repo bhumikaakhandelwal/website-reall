@@ -36,6 +36,21 @@ export interface MemberProfile {
   updated_at: string;
 }
 
+// Phase 5A: one row of the manager-only member directory, as the API returns
+// it. `level` is derived from `totalXp` (lib/xp/levels.ts) rather than read
+// from the database, and `joinedAt` is the member's `created_at` — the same
+// value the profile endpoint already exposes.
+export interface MemberDirectoryEntry {
+  memberId: string;
+  email: string;
+  displayName: string;
+  membershipStatus: MembershipStatus;
+  joinedAt: string;
+  totalXp: number;
+  level: number;
+  levelName: string;
+}
+
 // Re-export Zod schemas for validation
 export {
   membershipStatusSchema,

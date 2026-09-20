@@ -11,7 +11,7 @@
 // Nothing here runs in the application; it is test-only scaffolding.
 
 import { registerHooks } from 'node:module';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -25,14 +25,41 @@ const DOUBLES = new Map([
   ['@/lib/auth/session', path.join(root, 'tests/doubles/auth-session.ts')],
 ]);
 
+// The privileged Supabase client is doubled too, but as a stubbable factory
+// rather than a fixed module: tests that exercise the real lib/db/queries.ts
+// need to control what a `.rpc()` call resolves to (see
+// tests/leaderboard-query-shape.test.mjs). Tests that only drive a route hit
+// the `@/lib/db/queries` double above and never reach this one.
+DOUBLES.set(
+  '@/lib/supabase/admin',
+  path.join(root, 'tests/doubles/supabase-admin.ts')
+);
+
+// Phase 8D: the anon-key client bound to the request cookies. Sign-in,
+// sign-out, password update and password reset all go through it now, so the
+// auth routes need to be able to drive those without a Supabase project.
+DOUBLES.set(
+  '@/lib/supabase/server',
+  path.join(root, 'tests/doubles/supabase-server.ts')
+);
+
 function findSourceFile(basePath) {
   const candidates = [
+    // `basePath` itself matches a specifier that already carries its
+    // extension (`./doubles/db-queries.ts`).
+    basePath,
     `${basePath}.ts`,
     `${basePath}.tsx`,
+    `${basePath}.js`,
+    `${basePath}.mjs`,
     path.join(basePath, 'index.ts'),
   ];
 
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+  return (
+    candidates.find(
+      (candidate) => existsSync(candidate) && statSync(candidate).isFile()
+    ) ?? null
+  );
 }
 
 function resolveModule(specifier, context, nextResolve) {
@@ -50,13 +77,30 @@ function resolveModule(specifier, context, nextResolve) {
     }
   }
 
+  // Application code uses extensionless imports (`./schema`, `next/server`);
+  // Node's ESM resolver requires an explicit extension. Resolve those here,
+  // before delegating, so a failure never reaches the bare-specifier path
+  // below (an unresolved `@/...` alias must not be retried as a package name).
+  if (specifier.startsWith('.')) {
+    const resolved = findSourceFile(
+      path.resolve(path.dirname(fileURLToPath(context.parentURL)), specifier)
+    );
+
+    if (resolved) {
+      return { url: pathToFileURL(resolved).href, shortCircuit: true };
+    }
+  }
+
   try {
     return nextResolve(specifier, context);
   } catch (error) {
     // `next` ships no "exports" map, so bare subpaths like "next/server" have
     // no extension resolution in Node's ESM resolver. Retry with ".js" before
     // giving up.
-    const isBare = !specifier.startsWith('.') && !path.isAbsolute(specifier);
+    const isBare =
+      !specifier.startsWith('.') &&
+      !specifier.startsWith('@/') &&
+      !path.isAbsolute(specifier);
 
     if (isBare) {
       try {
