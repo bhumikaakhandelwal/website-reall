@@ -120,10 +120,10 @@ export function GlobalNavigation() {
         // The server session is gone (expired or cleared): drop the client
         // gate and send the visitor back to the login screen.
         if (memberResponse.status === 401 || memberResponse.status === 404) {
-          localStorage.removeItem("dbce-logged-in");
-          router.replace("/login");
-          return;
-        }
+  // During inauguration mode, visitors are allowed to view
+  // the website without an active login session.
+  setMember(null);
+}
 
         if (memberResponse.ok) {
           const data: { user?: MemberProfile } = await memberResponse.json();

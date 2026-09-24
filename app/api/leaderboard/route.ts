@@ -1,74 +1,125 @@
-// Phase 4: the three monthly leaderboards.
-//
-// One endpoint, one request: the Handbook defines exactly three leaderboards,
-// the page shows all three, and each is a handful of rows. A `?type=` parameter
-// would add surface without adding anything the caller cannot get here.
-//
-// Authorization mirrors GET /api/xp/me: the signed session cookie is the only
-// identity source, and no session means 401. A leaderboard is a view of other
-// members' XP, so it is deliberately NOT public and NOT reachable with the
-// publishable key alone - the aggregation function behind it is granted to
-// service_role only (see the Phase 4 migration), and this route is the only
-// thing that calls it.
-//
-// Values are derived from xp_ledger through a database-side GROUP BY: nothing
-// loads ledger rows into application memory, and there is no stored total or
-// leaderboard table to drift from the audit trail. Ranking is the caller's job
-// (assignRanks in lib/xp/leaderboards.ts, via the shared module below).
+import { NextResponse } from "next/server";
+import { getMonthlyLeaderboard } from "@/lib/db/queries";
+import {
+  LEADERBOARDS,
+  assignRanks,
+  istMonthPeriod,
+} from "@/lib/xp/leaderboards";
 
-import { NextResponse } from 'next/server';
-import { getMonthlyLeaderboard } from '@/lib/db/queries';
-import { requireMember } from '@/lib/auth/require-manager';
-import { LEADERBOARDS, assignRanks, istMonthPeriod } from '@/lib/xp/leaderboards';
+/*
+ * ==========================================
+ * INAUGURATION MODE
+ * ==========================================
+ *
+ * true  = leaderboard can be viewed without login
+ * false = leaderboard requires login again
+ */
+const INAUGURATION_MODE = true;
 
 export async function GET() {
   try {
-    // Phase 8D: the shared member gate. The leaderboard is readable by any
-    // signed-in member, so this is requireMember rather than requireXpManager -
-    // but a deactivated member is refused, which the old cookie-only session
-    // could not express.
-    const auth = await requireMember();
+    /*
+     * ==========================================
+     * AUTHENTICATION
+     * ==========================================
+     *
+     * During inauguration we intentionally skip
+     * the member authentication check.
+     *
+     * After inauguration, change:
+     *
+     *     INAUGURATION_MODE = false
+     *
+     * and restore the requireMember() check.
+     */
+    if (!INAUGURATION_MODE) {
+      const { requireMember } = await import(
+        "@/lib/auth/require-manager"
+      );
 
-    if (!auth.ok) return auth.response;
+      const auth = await requireMember();
 
-    // The current leaderboard month, as [start, end). Both bounds are computed
-    // once, in UTC, and handed to the database as an explicit range.
+      if (!auth.ok) {
+        return auth.response;
+      }
+    }
+
+    /*
+     * ==========================================
+     * CURRENT MONTH
+     * ==========================================
+     */
+
     const period = istMonthPeriod();
 
-    // One query per Handbook leaderboard, each restricted to its own activity
-    // codes (null = every activity, for the overall board).
+    /*
+     * ==========================================
+     * LOAD ALL LEADERBOARDS
+     * ==========================================
+     */
+
     const results = await Promise.all(
       LEADERBOARDS.map((board) =>
-        getMonthlyLeaderboard(period, board.activityCodes)
+        getMonthlyLeaderboard(
+          period,
+          board.activityCodes
+        )
       )
     );
 
+    /*
+     * Database error
+     */
     if (results.some((rows) => rows === null)) {
       console.error(
-        'Error in GET /api/leaderboard: leaderboard aggregation unavailable'
+        "Error in GET /api/leaderboard: leaderboard aggregation unavailable"
       );
+
       return NextResponse.json(
-        { error: 'Internal server error' },
-        { status: 500 }
+        {
+          error: "Internal server error",
+        },
+        {
+          status: 500,
+        }
       );
     }
+
+    /*
+     * ==========================================
+     * RETURN LEADERBOARD
+     * ==========================================
+     */
 
     return NextResponse.json({
       period: {
         start: period.start.toISOString(),
         end: period.end.toISOString(),
       },
-      boards: LEADERBOARDS.map((board, index) => ({
-        id: board.id,
-        // Rows arrive XP-ordered by the database; this only numbers them.
-        entries: assignRanks(results[index] ?? []),
-      })),
+
+      boards: LEADERBOARDS.map(
+        (board, index) => ({
+          id: board.id,
+
+          entries: assignRanks(
+            results[index] ?? []
+          ),
+        })
+      ),
     });
   } catch (error) {
-    console.error('Error in GET /api/leaderboard:', error);
+    console.error(
+      "Error in GET /api/leaderboard:",
+      error
+    );
+
     return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
+      {
+        error: "Internal server error",
+      },
+      {
+        status: 500,
+      }
     );
   }
 }

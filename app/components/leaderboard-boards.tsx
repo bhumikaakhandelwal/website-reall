@@ -1,22 +1,8 @@
 "use client";
 
 import { formatIstMonth } from "@/lib/dates";
-
-// Phase 4: the three monthly leaderboards, read from GET /api/leaderboard.
-//
-// Presentation only — the ranking is computed server-side from xp_ledger.
-// Which board is which lives in lib/xp/leaderboards.ts; the titles and
-// descriptions come from the shared frozen content (app/content/xp-content.ts)
-// so this page and /xp-system cannot describe the same three boards
-// differently.
-//
-// The page renders inside LoginGate, which already gates the site on the
-// client-side session indicator. This component additionally treats a 401/404
-// from the API the same way GlobalNavigation does: clear the client gate and
-// return to /login.
-
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+
 import { Reveal } from "./reveal";
 import { leaderboardTypes } from "../content/xp-content";
 
@@ -34,7 +20,10 @@ type LeaderboardBoard = {
 };
 
 type LeaderboardPayload = {
-  period: { start: string; end: string };
+  period: {
+    start: string;
+    end: string;
+  };
   boards: LeaderboardBoard[];
 };
 
@@ -45,18 +34,18 @@ type LoadState =
 
 const SKELETON_ROWS = [0, 1, 2];
 
-// Explicit locale and UTC: the month boundary comes from the server in UTC, and
-// the label must not shift with the visitor's locale or timezone.
+// Explicit locale and UTC.
+// The month boundary comes from the server in UTC,
+// and the label must not shift with the visitor's locale or timezone.
 function formatMonth(iso: string): string {
-  // Phase 10A: the club's month, in IST. The window this label describes comes
-  // from the same timezone (lib/dates.ts), so the two cannot disagree.
   return formatIstMonth(iso);
 }
 
 export function LeaderboardBoards() {
-  const router = useRouter();
+  const [state, setState] = useState<LoadState>({
+    status: "loading",
+  });
 
-  const [state, setState] = useState<LoadState>({ status: "loading" });
   // Bumped by the retry button to re-run the fetch effect.
   const [attempt, setAttempt] = useState(0);
 
@@ -71,23 +60,48 @@ export function LeaderboardBoards() {
           signal: controller.signal,
         });
 
-        // The server session is gone (expired or cleared): drop the client
-        // gate and send the visitor back to the login screen.
+        /*
+         * ==========================================
+         * INAUGURATION MODE
+         * ==========================================
+         *
+         * The website is currently accessible without
+         * logging in.
+         *
+         * Therefore, DO NOT redirect to /login here.
+         *
+         * If the API still returns 401/404, simply show
+         * the normal error state instead of sending the
+         * visitor back to the login page.
+         */
         if (response.status === 401 || response.status === 404) {
-          localStorage.removeItem("dbce-logged-in");
-          router.replace("/login");
+          setState({ status: "error" });
           return;
         }
 
+        /*
+         * Any other unsuccessful response.
+         */
         if (!response.ok) {
           setState({ status: "error" });
           return;
         }
 
-        const payload = (await response.json()) as LeaderboardPayload;
-        setState({ status: "ready", payload });
+        /*
+         * Successfully received leaderboard data.
+         */
+        const payload =
+          (await response.json()) as LeaderboardPayload;
+
+        setState({
+          status: "ready",
+          payload,
+        });
       } catch {
-        // Aborted (unmount or retry) — nothing to report.
+        /*
+         * Aborted because the component was unmounted
+         * or the user clicked retry.
+         */
         if (!controller.signal.aborted) {
           setState({ status: "error" });
         }
@@ -96,12 +110,23 @@ export function LeaderboardBoards() {
 
     loadLeaderboards();
 
-    return () => controller.abort();
-  }, [router, attempt]);
+    return () => {
+      controller.abort();
+    };
+  }, [attempt]);
+
+  /*
+   * ==========================================
+   * ERROR STATE
+   * ==========================================
+   */
 
   if (state.status === "error") {
     return (
-      <section aria-labelledby="leaderboard-error" className="mt-section">
+      <section
+        aria-labelledby="leaderboard-error"
+        className="mt-section"
+      >
         <div className="rounded-panel border border-border bg-surface p-6 sm:p-8">
           <p className="font-mono text-xs uppercase tracking-[0.16em] text-accent-text">
             Unavailable
@@ -115,14 +140,28 @@ export function LeaderboardBoards() {
           </h2>
 
           <p className="mt-3 max-w-xl text-sm leading-6 text-muted">
-            The rankings are unchanged — the page just could not read them this
-            time. Try again in a moment.
+            The rankings are unchanged — the page just could not
+            read them this time. Try again in a moment.
           </p>
 
           <button
             type="button"
-            onClick={() => setAttempt((value) => value + 1)}
-            className="mt-6 border border-border px-5 py-3 font-mono text-xs tracking-[0.12em] transition-colors hover:border-accent hover:text-accent"
+            onClick={() =>
+              setAttempt((value) => value + 1)
+            }
+            className="
+              mt-6
+              border
+              border-border
+              px-5
+              py-3
+              font-mono
+              text-xs
+              tracking-[0.12em]
+              transition-colors
+              hover:border-accent
+              hover:text-accent
+            "
           >
             TRY AGAIN →
           </button>
@@ -131,38 +170,90 @@ export function LeaderboardBoards() {
     );
   }
 
+  /*
+   * ==========================================
+   * MONTH LABEL
+   * ==========================================
+   */
+
   const periodLabel =
-    state.status === "ready" ? formatMonth(state.payload.period.start) : null;
+    state.status === "ready"
+      ? formatMonth(state.payload.period.start)
+      : null;
 
   return (
     <>
-      {/* Period bar */}
-      <div className="mt-section flex items-center justify-between gap-4 border-b border-border pb-4 text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+      {/* ========================================
+          PERIOD BAR
+      ========================================= */}
+
+      <div
+        className="
+          mt-section
+          flex
+          items-center
+          justify-between
+          gap-4
+          border-b
+          border-border
+          pb-4
+          text-xs
+          font-semibold
+          uppercase
+          tracking-[0.16em]
+          text-muted
+        "
+      >
         <span>Monthly ranking</span>
 
         {periodLabel ? (
-          <span className="text-accent-text">{periodLabel}</span>
+          <span className="text-accent-text">
+            {periodLabel}
+          </span>
         ) : (
           <span
             aria-hidden="true"
-            className="block h-4 w-32 animate-pulse rounded bg-muted"
+            className="
+              block
+              h-4
+              w-32
+              animate-pulse
+              rounded
+              bg-muted
+            "
           />
         )}
       </div>
 
+      {/* ========================================
+          LOADING STATUS
+      ========================================= */}
+
       {state.status === "loading" && (
-        <span role="status" className="sr-only">
+        <span
+          role="status"
+          className="sr-only"
+        >
           Loading leaderboards
         </span>
       )}
 
+      {/* ========================================
+          THREE LEADERBOARDS
+      ========================================= */}
+
       {leaderboardTypes.map((board, index) => {
-        // null means "not loaded yet" (skeletons); an empty array means the
-        // board loaded and nobody has qualifying XP this month.
+        /*
+         * null = still loading
+         * []   = loaded but nobody has XP
+         * array = actual leaderboard entries
+         */
         const entries: LeaderboardEntry[] | null =
           state.status === "ready"
-            ? state.payload.boards.find((candidate) => candidate.id === board.id)
-                ?.entries ?? []
+            ? state.payload.boards.find(
+                (candidate) =>
+                  candidate.id === board.id
+              )?.entries ?? []
             : null;
 
         return (
@@ -171,6 +262,10 @@ export function LeaderboardBoards() {
             aria-labelledby={`leaderboard-${board.id}`}
             className="mt-section"
           >
+            {/* ====================================
+                TITLE
+            ===================================== */}
+
             <Reveal>
               <div className="flex items-baseline gap-4">
                 <span className="font-mono text-xs text-accent-text">
@@ -179,7 +274,13 @@ export function LeaderboardBoards() {
 
                 <h2
                   id={`leaderboard-${board.id}`}
-                  className="text-3xl font-semibold tracking-[-0.045em] text-foreground sm:text-4xl"
+                  className="
+                    text-3xl
+                    font-semibold
+                    tracking-[-0.045em]
+                    text-foreground
+                    sm:text-4xl
+                  "
                 >
                   {board.title}
                 </h2>
@@ -190,39 +291,131 @@ export function LeaderboardBoards() {
               </p>
             </Reveal>
 
+            {/* ====================================
+                LEADERBOARD TABLE
+            ===================================== */}
+
             <div className="mt-8 overflow-hidden rounded-panel border border-border">
-              <div className="flex items-center justify-between bg-surface px-5 py-3 text-xs font-semibold uppercase tracking-[0.1em] text-muted sm:px-7">
+              {/* Header */}
+
+              <div
+                className="
+                  flex
+                  items-center
+                  justify-between
+                  bg-surface
+                  px-5
+                  py-3
+                  text-xs
+                  font-semibold
+                  uppercase
+                  tracking-[0.1em]
+                  text-muted
+                  sm:px-7
+                "
+              >
                 <span>Member</span>
                 <span>XP earned</span>
               </div>
 
               <ul aria-busy={entries === null}>
+                {/* =================================
+                    SKELETON LOADING ROWS
+                ================================== */}
+
                 {entries === null &&
                   SKELETON_ROWS.map((row) => (
                     <li
                       key={row}
                       aria-hidden="true"
-                      className="flex items-center justify-between border-t border-border px-5 py-4 sm:px-7"
+                      className="
+                        flex
+                        items-center
+                        justify-between
+                        border-t
+                        border-border
+                        px-5
+                        py-4
+                        sm:px-7
+                      "
                     >
-                      <span className="h-4 w-40 animate-pulse rounded bg-muted" />
-                      <span className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                      <span
+                        className="
+                          h-4
+                          w-40
+                          animate-pulse
+                          rounded
+                          bg-muted
+                        "
+                      />
+
+                      <span
+                        className="
+                          h-6
+                          w-20
+                          animate-pulse
+                          rounded-full
+                          bg-muted
+                        "
+                      />
                     </li>
                   ))}
 
-                {entries !== null && entries.length === 0 && (
-                  <li className="border-t border-border px-5 py-6 text-sm text-muted sm:px-7">
-                    No qualifying XP has been recorded for{" "}
-                    {periodLabel ?? "this month"} yet.
-                  </li>
-                )}
+                {/* =================================
+                    EMPTY LEADERBOARD
+                ================================== */}
+
+                {entries !== null &&
+                  entries.length === 0 && (
+                    <li
+                      className="
+                        border-t
+                        border-border
+                        px-5
+                        py-6
+                        text-sm
+                        text-muted
+                        sm:px-7
+                      "
+                    >
+                      No qualifying XP has been
+                      recorded for{" "}
+                      {periodLabel ?? "this month"} yet.
+                    </li>
+                  )}
+
+                {/* =================================
+                    LEADERBOARD ENTRIES
+                ================================== */}
 
                 {entries !== null &&
                   entries.map((entry) => (
                     <li
                       key={entry.memberId}
-                      className="flex items-center justify-between gap-4 border-t border-border px-5 py-4 transition-colors hover:bg-accent/5 sm:px-7"
+                      className="
+                        flex
+                        items-center
+                        justify-between
+                        gap-4
+                        border-t
+                        border-border
+                        px-5
+                        py-4
+                        transition-colors
+                        hover:bg-accent/5
+                        sm:px-7
+                      "
                     >
-                      <div className="flex min-w-0 items-center gap-5">
+                      <div
+                        className="
+                          flex
+                          min-w-0
+                          items-center
+                          gap-5
+                        "
+                      >
+                        {/* Rank */}
+
                         <span
                           className={`font-mono text-xs ${
                             entry.rank === 1
@@ -230,15 +423,43 @@ export function LeaderboardBoards() {
                               : "text-muted"
                           }`}
                         >
-                          {String(entry.rank).padStart(2, "0")}
+                          {String(entry.rank).padStart(
+                            2,
+                            "0"
+                          )}
                         </span>
 
-                        <span className="truncate text-sm text-foreground sm:text-base">
+                        {/* Member name */}
+
+                        <span
+                          className="
+                            truncate
+                            text-sm
+                            text-foreground
+                            sm:text-base
+                          "
+                        >
                           {entry.displayName}
                         </span>
                       </div>
 
-                      <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-sm font-semibold text-accent-text">
+                      {/* XP */}
+
+                      <span
+                        className="
+                          shrink-0
+                          rounded-full
+                          border
+                          border-accent/40
+                          bg-accent/10
+                          px-3
+                          py-1
+                          font-mono
+                          text-sm
+                          font-semibold
+                          text-accent-text
+                        "
+                      >
                         {entry.xp.toLocaleString()} XP
                       </span>
                     </li>

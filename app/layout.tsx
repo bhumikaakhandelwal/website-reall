@@ -4,7 +4,7 @@ import { GlobalNavigation } from "./components/global-navigation";
 import { SiteFooter } from "./components/site-footer";
 import "./globals.css";
 import LoginGate from "./components/login-gate";
-
+import InaugurationIntro from "./components/inauguration-intro";
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -35,6 +35,8 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} antialiased`}
     >
       <body>
+        <LoginGate>
+        <InaugurationIntro>
         <a
           href="#main-content"
           className="sr-only fixed left-page top-4 z-50 rounded-card bg-foreground px-4 py-2 text-sm font-medium text-background focus:not-sr-only"
@@ -42,10 +44,11 @@ export default function RootLayout({
           Skip to main content
         </a>
         
-        <LoginGate>
-        {children}
-        </LoginGate>
         
+        {children}
+        
+        </InaugurationIntro>
+        </LoginGate>
       </body>
     </html>
   );

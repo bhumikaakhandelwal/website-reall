@@ -6,15 +6,16 @@ import type { ReactNode } from "react";
 import { GlobalNavigation } from "./global-navigation";
 import { SiteFooter } from "./site-footer";
 
-/**
- * Pages that render without a session.
+/*
+ * ==========================================
+ * INAUGURATION MODE
+ * ==========================================
  *
- * `/login` is the sign-in page itself. `/auth/callback` is where every emailed
- * auth link lands, and gating it was a bug: the member is NOT signed in yet -
- * establishing that session is exactly what the page does - so this gate would
- * bounce them to /login before the URL fragment carrying their tokens could be
- * read, and the link would appear expired.
+ * true  -> Homepage is accessible without login
+ * false -> Normal login protection is restored
  */
+const INAUGURATION_MODE = true;
+
 const PUBLIC_PATHS = ["/login", "/auth/callback"];
 
 export default function LoginGate({
@@ -30,6 +31,27 @@ export default function LoginGate({
   useEffect(() => {
     const loggedIn = localStorage.getItem("dbce-logged-in");
 
+    /*
+     * ==========================================
+     * INAUGURATION MODE
+     * ==========================================
+     *
+     * Allow everyone to enter the website.
+     *
+     * The login page still exists.
+     * We are NOT deleting or disabling it.
+     */
+    if (INAUGURATION_MODE) {
+      setChecking(false);
+      return;
+    }
+
+    /*
+     * ==========================================
+     * NORMAL LOGIN MODE
+     * ==========================================
+     */
+
     if (!loggedIn && !PUBLIC_PATHS.includes(pathname)) {
       router.replace("/login");
       return;
@@ -43,20 +65,29 @@ export default function LoginGate({
     setChecking(false);
   }, [pathname, router]);
 
+  /*
+   * Loading state
+   */
   if (checking) {
     return (
       <div className="min-h-screen bg-background" />
     );
   }
 
-  // Sign-in and the auth callback get NO navbar or footer. Neither is a page of
-  // the site: one is the door, the other is a moment in the middle of opening
-  // it.
+  /*
+   * Login page does NOT get navbar.
+   */
   if (PUBLIC_PATHS.includes(pathname)) {
     return <>{children}</>;
   }
 
-  // All normal website pages get navbar + footer
+  /*
+   * ==========================================
+   * NORMAL WEBSITE
+   * ==========================================
+   *
+   * Navbar + page + footer
+   */
   return (
     <>
       <GlobalNavigation />
