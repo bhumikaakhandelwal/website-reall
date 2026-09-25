@@ -11,9 +11,9 @@ import type { MemberProfile } from "@/lib/db/types";
 const navigation = [
   { label: "Home", href: "/" },
   { label: "About", href: "/#about" },
-  { label: "Activities", href: "/#activities" },
-  { label: "Hackathon", href: "/#hackathon" },
   { label: "Challenges", href: "/#open-challenges" },
+  { label: "Hackathon", href: "/#hackathon" },
+  { label: "Activities", href: "/#activities" },
   { label: "Leaderboard", href: "/leaderboard" },
   { label: "XP System", href: "/xp-system" },
   {
@@ -156,7 +156,7 @@ export function GlobalNavigation() {
   }
 
   return (
-    <header className="border-b border-border bg-background">
+    <header className="border-b border-border bg-background fixed top-0 left-0 right-0 z-[100]">
       <Container className="flex min-h-[var(--nav-height)] items-center justify-between gap-6 px-page">
 
           {/*
